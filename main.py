@@ -21,7 +21,7 @@ from datetime import datetime
 import logging
 import queue
 import signal
-from typing import Union, Optional, TYPE_CHECKING, cast
+from typing import Union, Optional, TYPE_CHECKING, cast, Callable, Awaitable
 
 from azure.core.credentials import AzureKeyCredential
 from azure.core.credentials_async import AsyncTokenCredential
@@ -32,15 +32,18 @@ from azure.ai.voicelive.models import (
     AudioEchoCancellation,
     AudioNoiseReduction,
     AzureStandardVoice,
+    InputTextContentPart,
     InputAudioFormat,
     Modality,
     OutputAudioFormat,
     RequestSession,
     ServerEventType,
-    ServerVad
+    ServerVad,
+    UserMessageItem,
 )
 from dotenv import load_dotenv
 import pyaudio
+from langdetect import detect, LangDetectException
 
 if TYPE_CHECKING:
     # Only needed for type checking; avoids runtime import issues
@@ -256,6 +259,8 @@ class BasicVoiceAssistant:
         model: str,
         voice: str,
         instructions: str,
+        initial_text: Optional[str] = None,
+        event_callback: Optional[Callable[[str, dict], Union[None, Awaitable[None]]]] = None,
     ):
 
         self.endpoint = endpoint
@@ -268,6 +273,48 @@ class BasicVoiceAssistant:
         self.session_ready = False
         self._active_response = False
         self._response_api_done = False
+        self._event_callback = event_callback
+        self._user_transcript = ""
+        self._assistant_transcript = ""
+        self._detected_language: Optional[str] = None
+        self._initial_text = initial_text
+        self._initial_text_sent = False
+
+    async def _emit(self, event_type: str, payload: dict) -> None:
+        if not self._event_callback:
+            return
+        try:
+            result = self._event_callback(event_type, payload)
+            if asyncio.iscoroutine(result):
+                await result
+        except Exception:
+            logger.exception("Failed to emit event: %s", event_type)
+
+    def _maybe_detect_language(self, text: str) -> Optional[str]:
+        if not text or self._detected_language:
+            return self._detected_language
+        try:
+            lang = detect(text)
+        except LangDetectException:
+            return None
+
+        if lang and lang != "en":
+            language_map = {
+                "es": "Spanish",
+                "fr": "French",
+                "de": "German",
+                "it": "Italian",
+                "pt": "Portuguese",
+                "ja": "Japanese",
+                "ko": "Korean",
+                "zh-cn": "Chinese (Simplified)",
+                "zh-tw": "Chinese (Traditional)",
+                "ar": "Arabic",
+                "ru": "Russian",
+                "hi": "Hindi",
+            }
+            self._detected_language = language_map.get(lang, lang)
+        return self._detected_language
 
     async def start(self):
         """Start the voice assistant session."""
@@ -299,6 +346,7 @@ class BasicVoiceAssistant:
                 print("Start speaking to begin conversation")
                 print("Press Ctrl+C to exit")
                 print("=" * 60 + "\n")
+                await self._emit("status", {"message": "Ready"})
 
                 # Process events
                 await self._process_events()
@@ -343,6 +391,17 @@ class BasicVoiceAssistant:
 
         logger.info("Session configuration sent")
 
+    async def _send_text_message(self, text: str) -> None:
+        conn = self.connection
+        assert conn is not None, "Connection must be established before sending text"
+
+        item = UserMessageItem(content=[InputTextContentPart(text=text)])
+        await conn.conversation.item.create(item=item)
+        await conn.response.create()
+
+        await self._emit("transcript_delta", {"text": text})
+        await self._emit("transcript_done", {"text": text})
+
     async def _process_events(self):
         """Process events from the VoiceLive connection."""
         try:
@@ -365,13 +424,19 @@ class BasicVoiceAssistant:
         if event.type == ServerEventType.SESSION_UPDATED:
             logger.info("Session ready: %s", event.session.id)
             self.session_ready = True
+            await self._emit("status", {"message": "Listening for speech..."})
 
             # Start audio capture once session is ready
             ap.start_capture()
 
+            if self._initial_text and not self._initial_text_sent:
+                self._initial_text_sent = True
+                await self._send_text_message(self._initial_text)
+
         elif event.type == ServerEventType.INPUT_AUDIO_BUFFER_SPEECH_STARTED:
             logger.info("User started speaking - stopping playback")
             print("🎤 Listening...")
+            await self._emit("status", {"message": "Listening for speech..."})
 
             ap.skip_pending_audio()
 
@@ -389,11 +454,13 @@ class BasicVoiceAssistant:
         elif event.type == ServerEventType.INPUT_AUDIO_BUFFER_SPEECH_STOPPED:
             logger.info("🎤 User stopped speaking")
             print("🤔 Processing...")
+            await self._emit("status", {"message": "Processing..."})
 
         elif event.type == ServerEventType.RESPONSE_CREATED:
             logger.info("🤖 Assistant response created")
             self._active_response = True
             self._response_api_done = False
+            await self._emit("status", {"message": "Responding..."})
 
         elif event.type == ServerEventType.RESPONSE_AUDIO_DELTA:
             logger.debug("Received audio delta")
@@ -402,6 +469,7 @@ class BasicVoiceAssistant:
         elif event.type == ServerEventType.RESPONSE_AUDIO_DONE:
             logger.info("🤖 Assistant finished speaking")
             print("🎤 Ready for next input...")
+            await self._emit("status", {"message": "Listening for speech..."})
 
         elif event.type == ServerEventType.RESPONSE_DONE:
             logger.info("✅ Response complete")
@@ -418,6 +486,45 @@ class BasicVoiceAssistant:
 
         elif event.type == ServerEventType.CONVERSATION_ITEM_CREATED:
             logger.debug("Conversation item created: %s", event.item.id)
+
+        elif event.type == ServerEventType.CONVERSATION_ITEM_INPUT_AUDIO_TRANSCRIPTION_DELTA:
+            delta = getattr(event, "delta", "") or ""
+            if delta:
+                self._user_transcript += delta
+                await self._emit("transcript_delta", {"text": delta})
+
+        elif event.type == ServerEventType.CONVERSATION_ITEM_INPUT_AUDIO_TRANSCRIPTION_COMPLETED:
+            text = getattr(event, "transcript", None) or self._user_transcript
+            if text:
+                await self._emit("transcript_done", {"text": text})
+                detected = self._maybe_detect_language(text)
+                if detected:
+                    await self._emit("language", {"language": detected})
+            self._user_transcript = ""
+
+        elif event.type == ServerEventType.RESPONSE_TEXT_DELTA:
+            delta = getattr(event, "delta", "") or ""
+            if delta:
+                self._assistant_transcript += delta
+                await self._emit("assistant_delta", {"text": delta})
+
+        elif event.type == ServerEventType.RESPONSE_TEXT_DONE:
+            text = getattr(event, "text", None) or self._assistant_transcript
+            if text:
+                await self._emit("assistant_done", {"text": text})
+            self._assistant_transcript = ""
+
+        elif event.type == ServerEventType.RESPONSE_AUDIO_TRANSCRIPT_DELTA:
+            delta = getattr(event, "delta", "") or ""
+            if delta:
+                self._assistant_transcript += delta
+                await self._emit("assistant_delta", {"text": delta})
+
+        elif event.type == ServerEventType.RESPONSE_AUDIO_TRANSCRIPT_DONE:
+            text = getattr(event, "text", None) or self._assistant_transcript
+            if text:
+                await self._emit("assistant_done", {"text": text})
+            self._assistant_transcript = ""
 
         else:
             logger.debug("Unhandled event type: %s", event.type)

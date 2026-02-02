@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Live Voice Translation</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <main class="app">
+      <header class="header">
+        <div class="brand">
+          <span class="logo" aria-hidden="true">🎙️</span>
+          <div>
+            <h1>Live Voice Translation</h1>
+            <p class="subtitle">Start a new conversation and speak naturally.</p>
+          </div>
+        </div>
+      </header>
+
+      <section class="controls">
+        <button id="newConversation" class="primary">Start new conversation</button>
+        <p id="status" class="status">Idle</p>
+      </section>
+
+      <section class="chat-container">
+        <div id="chat" class="chat-messages" aria-live="polite" aria-label="Conversation"></div>
+      </section>
+    </main>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>

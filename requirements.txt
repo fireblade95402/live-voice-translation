@@ -3,3 +3,6 @@ azure-core
 azure-identity
 python-dotenv
 pyaudio
+fastapi
+uvicorn[standard]
+langdetect

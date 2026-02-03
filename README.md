@@ -18,7 +18,115 @@ A real-time voice translation assistant powered by Azure OpenAI VoiceLive API. T
 - Microphone and speakers for audio input/output
 - [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli) for authentication
 
-## Installation
+## Quick Start
+
+### 1. Clone and Set Up
+
+```bash
+# Clone the repository
+git clone <repository-url>
+cd live-voice-translation
+
+# Create Python virtual environment (optional but recommended)
+python -m venv venv
+
+# Activate virtual environment
+# On Windows:
+venv\Scripts\activate
+# On macOS/Linux:
+source venv/bin/activate
+
+# Install dependencies
+pip install -r requirements.txt
+```
+
+### 2. Configure Azure
+
+```bash
+# Log in to Azure
+az login
+
+# Verify you have access to your subscription
+az account show
+```
+
+### 3. Set Up Environment Variables
+
+```bash
+# Copy the example configuration
+cp .env.example .env
+
+# Edit .env with your actual Azure credentials
+# Required fields to fill in:
+# - AZURE_VOICELIVE_ENDPOINT
+# - AZURE_SUBSCRIPTION_ID
+# - AZURE_VOICELIVE_PROJECT_NAME
+# - AZURE_LOCATION
+# - AZURE_ENV_NAME
+
+nano .env  # or use your preferred editor
+```
+
+See [Configuration](#configuration) section for details on each variable.
+
+### 4. Run the Application
+
+Choose one of the two options below:
+
+#### Option A: Web Interface (Recommended)
+
+```bash
+# Start the FastAPI server
+uvicorn server:app --reload
+
+# Open browser to:
+# http://localhost:8000
+```
+
+The web interface provides:
+- Visual start/stop buttons
+- Real-time transcript display
+- Easy language selection
+- Responsive design
+
+#### Option B: Command Line
+
+```bash
+# Run the translator directly
+python main.py
+
+# With custom settings:
+python main.py \
+  --voice "en-US-Guy:DragonHDLatestNeural" \
+  --verbose
+```
+
+### 5. Use the Translator
+
+1. **Start translation:**
+   - Web: Click "Start"
+   - CLI: Wait for "VOICE ASSISTANT READY"
+
+2. **Specify languages:**
+   - Agent asks: "Which two languages would you like me to translate between?"
+   - You respond: "Spanish and English"
+
+3. **Confirm:**
+   - Agent confirms: "I will translate between Spanish and English. You may now begin."
+
+4. **Start translating:**
+   - Speak in one language
+   - Get instant translation in the other
+
+5. **Stop:**
+   - Web: Click "Stop"
+   - CLI: Press `Ctrl+C`
+
+## Installation Details
+
+### Full Step-by-Step Guide
+
+The quick start covers basic setup. Here's more detail:
 
 1. **Clone the repository:**
    ```bash

@@ -72,6 +72,31 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+def load_instructions() -> str:
+    """
+    Load system instructions from file or environment variable.
+    Prefers file-based instructions (AZURE_VOICELIVE_INSTRUCTIONS_FILE) over inline env var.
+    """
+    # Try loading from file first
+    instructions_file = os.environ.get("AZURE_VOICELIVE_INSTRUCTIONS_FILE")
+    if instructions_file and os.path.exists(instructions_file):
+        try:
+            with open(instructions_file, 'r', encoding='utf-8') as f:
+                instructions = f.read().strip()
+                logger.info(f"Loaded instructions from {instructions_file}")
+                return instructions
+        except Exception as e:
+            logger.warning(f"Failed to load instructions from {instructions_file}: {e}")
+    
+    # Fall back to environment variable
+    instructions = os.environ.get(
+        "AZURE_VOICELIVE_INSTRUCTIONS",
+        "You are a helpful AI assistant. Respond naturally and conversationally. "
+        "Keep your responses concise but engaging.",
+    )
+    logger.info("Using instructions from environment variable or default")
+    return instructions
+
 class AudioProcessor:
     """
     Handles real-time audio capture and playback for the voice assistant.
@@ -576,11 +601,7 @@ def main():
     logger.info("Using Azure token credential")
 
     # Create and start voice assistant
-    instructions = os.environ.get(
-        "AZURE_VOICELIVE_INSTRUCTIONS",
-        "You are a helpful AI assistant. Respond naturally and conversationally. "
-        "Keep your responses concise but engaging.",
-    )
+    instructions = load_instructions()
 
     assistant = BasicVoiceAssistant(
         endpoint=args.endpoint,

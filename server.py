@@ -11,7 +11,7 @@ from azure.identity.aio import AzureCliCredential
 from azure.core.credentials_async import AsyncTokenCredential
 from dotenv import load_dotenv
 
-from main import BasicVoiceAssistant
+from main import BasicVoiceAssistant, load_instructions
 
 # Load environment variables
 load_dotenv("./.env", override=True)
@@ -77,11 +77,7 @@ class AssistantManager:
             print("Creating credential", flush=True)
             credential: AsyncTokenCredential = AzureCliCredential()
 
-            instructions = os.environ.get(
-                "AZURE_VOICELIVE_INSTRUCTIONS",
-                "You are a helpful AI assistant. Respond naturally and conversationally. "
-                "Keep your responses concise but engaging.",
-            )
+            instructions = load_instructions()
 
             print("Creating assistant", flush=True)
             assistant = BasicVoiceAssistant(

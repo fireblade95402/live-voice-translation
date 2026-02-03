@@ -114,6 +114,28 @@ h1 {
   box-shadow: 0 6px 16px rgba(79, 70, 229, 0.4);
 }
 
+.secondary {
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px 20px;
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.secondary:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.secondary:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .status {
   color: var(--muted);
   font-size: 0.95rem;

@@ -1,8 +1,10 @@
 const newConversationButton = document.getElementById("newConversation");
+const pauseConversationButton = document.getElementById("pauseConversation");
 const statusEl = document.getElementById("status");
 const chatEl = document.getElementById("chat");
 
 let conversationActive = false;
+let conversationPaused = false;
 let socket;
 let currentUserMessage = null;
 let currentAssistantMessage = null;
@@ -37,31 +39,84 @@ function appendToMessage(bubble, text) {
   chatEl.scrollTop = chatEl.scrollHeight;
 }
 
-function startConversation() {
+function updateControls() {
+  if (!conversationActive) {
+    pauseConversationButton.disabled = true;
+    pauseConversationButton.textContent = "Pause";
+    return;
+  }
+
+  pauseConversationButton.disabled = false;
+  pauseConversationButton.textContent = conversationPaused ? "Resume" : "Pause";
+}
+
+function startConversation({ clear = true, initialText, statusMessage } = {}) {
   if (!socket || socket.readyState !== WebSocket.OPEN) {
     setStatus("Waiting for connection...");
     return;
   }
   conversationActive = true;
-  clearConversation();
-  setStatus("Starting session...");
+  conversationPaused = false;
+  if (clear) {
+    clearConversation();
+  }
+  setStatus(statusMessage || "Starting session...");
+  updateControls();
   console.log("Sending start message");
-  socket.send(JSON.stringify({ type: "start", text: "Hi" }));
+
+  const payload = { type: "start" };
+  if (typeof initialText === "string") {
+    payload.text = initialText;
+  }
+  socket.send(JSON.stringify(payload));
 }
 
-function stopConversation() {
-  conversationActive = false;
-  setStatus("Idle");
+function stopConversation({ setIdle = true } = {}) {
+  if (setIdle) {
+    conversationActive = false;
+    conversationPaused = false;
+    setStatus("Idle");
+  }
+  updateControls();
   if (socket && socket.readyState === WebSocket.OPEN) {
     socket.send(JSON.stringify({ type: "stop" }));
   }
+}
+
+function pauseConversation() {
+  if (!conversationActive || conversationPaused) {
+    return;
+  }
+  conversationPaused = true;
+  setStatus("Paused");
+  updateControls();
+  stopConversation({ setIdle: false });
+}
+
+function resumeConversation() {
+  if (!conversationActive || !conversationPaused) {
+    return;
+  }
+  conversationPaused = false;
+  startConversation({ clear: false, statusMessage: "Resuming session..." });
 }
 
 newConversationButton.addEventListener("click", () => {
   if (conversationActive) {
     stopConversation();
   }
-  startConversation();
+  startConversation({ initialText: "Hi" });
+});
+
+pauseConversationButton.addEventListener("click", () => {
+  if (!conversationActive) {
+    return;
+  }
+  if (conversationPaused) {
+    resumeConversation();
+  } else {
+    pauseConversation();
+  }
 });
 
 function appendText(el, text) {
@@ -78,16 +133,23 @@ function connectWebSocket() {
   socket.addEventListener("open", () => {
     console.log("WebSocket connected");
     setStatus("Connected");
+    updateControls();
   });
 
   socket.addEventListener("close", () => {
     console.log("WebSocket closed");
     setStatus("Disconnected");
+    conversationActive = false;
+    conversationPaused = false;
+    updateControls();
   });
 
   socket.addEventListener("error", (event) => {
     console.error("WebSocket error:", event);
     setStatus("Connection error");
+    conversationActive = false;
+    conversationPaused = false;
+    updateControls();
   });
 
   socket.addEventListener("message", (event) => {
@@ -125,4 +187,5 @@ function connectWebSocket() {
 }
 
 setStatus("Connecting...");
+updateControls();
 connectWebSocket();

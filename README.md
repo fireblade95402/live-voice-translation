@@ -151,31 +151,34 @@ The quick start covers basic setup. Here's more detail:
 Copy and update the `.env` file with your Azure credentials:
 
 ```bash
-# Azure VoiceLive API
+# Azure VoiceLive API (REQUIRED)
 AZURE_VOICELIVE_ENDPOINT="your-endpoint-url"
-AZURE_VOICELIVE_MODEL="gpt-realtime"
+
+# TTS Voice (Optional, defaults to en-US-Ava:DragonHDLatestNeural)
 AZURE_VOICELIVE_VOICE="en-US-Ava:DragonHDLatestNeural"
 
-# Azure project settings
-AZURE_VOICELIVE_PROJECT_NAME="your-project-name"
-AZURE_VOICELIVE_API_VERSION="2025-10-01"
-
-# Logging
-ENABLE_LOGGING=true  # Set to false to disable file logging
-
-# Instructions file
+# Instructions file (Optional, defaults to system_instructions.txt)
 AZURE_VOICELIVE_INSTRUCTIONS_FILE="system_instructions.txt"
+
+# Logging (Optional, defaults to true)
+ENABLE_LOGGING=true
 ```
 
 ### Environment Variables
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `AZURE_VOICELIVE_ENDPOINT` | Azure VoiceLive API endpoint | Required |
-| `AZURE_VOICELIVE_MODEL` | Model to use for translation | `gpt-realtime` |
-| `AZURE_VOICELIVE_VOICE` | TTS voice for response audio | `en-US-Ava:DragonHDLatestNeural` |
-| `AZURE_VOICELIVE_INSTRUCTIONS_FILE` | Path to system instructions file | `system_instructions.txt` |
-| `ENABLE_LOGGING` | Enable/disable log file generation | `true` |
+| Variable | Description | Required | Default |
+|----------|-------------|----------|---------|
+| `AZURE_VOICELIVE_ENDPOINT` | Azure VoiceLive API endpoint URL | Yes | N/A |
+| `AZURE_VOICELIVE_VOICE` | TTS voice for response audio | No | `en-US-Ava:DragonHDLatestNeural` |
+| `AZURE_VOICELIVE_INSTRUCTIONS_FILE` | Path to system instructions file | No | `system_instructions.txt` |
+| `ENABLE_LOGGING` | Enable/disable log file generation (true/false) | No | `true` |
+
+### Getting Your AZURE_VOICELIVE_ENDPOINT
+
+1. Go to [Azure Portal](https://portal.azure.com)
+2. Navigate to your AI project resource
+3. In the Overview section, copy the endpoint URL
+4. Example: `https://your-project-name.services.ai.azure.com/`
 
 ### Supported Voices
 

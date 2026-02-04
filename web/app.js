@@ -24,6 +24,58 @@ function setStatus(message) {
   statusEl.textContent = message;
 }
 
+// Map common language names to representative country codes (fallbacks)
+const languageToCountry = {
+  English: "gb",
+  Spanish: "es",
+  French: "fr",
+  German: "de",
+  Italian: "it",
+  Chinese: "cn",
+  Japanese: "jp",
+  Korean: "kr",
+  Portuguese: "pt",
+  Russian: "ru",
+  Arabic: "sa",
+  Hindi: "in"
+};
+
+function countryCodeToEmoji(code) {
+  if (!code || code.length !== 2) return null;
+  const A = 0x1f1e6;
+  const chars = code.toUpperCase().split("");
+  return String.fromCodePoint(...chars.map(c => A + c.charCodeAt(0) - 65));
+}
+
+function makeCombinedFlagSVG(lang1, lang2) {
+  // Resolve emojis (use initials fallback if unknown)
+  const code1 = languageToCountry[lang1] || null;
+  const code2 = languageToCountry[lang2] || null;
+  const emoji1 = code1 ? countryCodeToEmoji(code1) : (lang1 ? lang1.slice(0,2).toUpperCase() : "");
+  const emoji2 = code2 ? countryCodeToEmoji(code2) : (lang2 ? lang2.slice(0,2).toUpperCase() : "");
+
+  const svg = `<?xml version='1.0' encoding='UTF-8'?>
+  <svg xmlns='http://www.w3.org/2000/svg' width='160' height='90' viewBox='0 0 160 90'>
+    <rect width='160' height='90' rx='8' fill='rgba(0,0,0,0.06)' />
+    <rect x='6' y='6' width='72' height='78' rx='6' fill='white' />
+    <rect x='82' y='6' width='72' height='78' rx='6' fill='white' />
+    <text x='42' y='54' font-size='44' text-anchor='middle' dominant-baseline='middle'>${emoji1}</text>
+    <text x='122' y='54' font-size='44' text-anchor='middle' dominant-baseline='middle'>${emoji2}</text>
+  </svg>`;
+
+  return 'data:image/svg+xml;utf8,' + encodeURIComponent(svg);
+}
+
+function updateCombinedFlag(lang1, lang2) {
+  try {
+    const uri = makeCombinedFlagSVG(lang1 || "", lang2 || "");
+    languageDisplayEl.style.backgroundImage = `url("${uri}")`;
+  } catch (e) {
+    console.error('Failed to generate combined flag SVG', e);
+    languageDisplayEl.style.backgroundImage = '';
+  }
+}
+
 function clearConversation() {
   chatEl.innerHTML = "";
   currentUserMessage = null;
@@ -242,6 +294,8 @@ function showLanguages(lang1, lang2) {
   language1El.textContent = lang1;
   language2El.textContent = lang2;
   languageDisplayEl.style.display = "flex";
+  // Generate and set combined flag background whenever languages update
+  updateCombinedFlag(lang1, lang2);
 }
 
 function extractLanguages(text) {

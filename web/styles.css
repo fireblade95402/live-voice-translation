@@ -152,6 +152,11 @@ h1 {
   border: 1px solid rgba(79, 70, 229, 0.3);
   border-radius: 12px;
   align-items: center;
+  /* Reserve space for combined flag background on the right */
+  padding-right: 88px;
+  background-repeat: no-repeat;
+  background-position: right center;
+  background-size: 72px 40px;
 }
 
 .language-label {

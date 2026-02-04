@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "services": {
+    "web": {
+      "host": "containerapp",
+      "language": "python"
+    }
+  }
+}

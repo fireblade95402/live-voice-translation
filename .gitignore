@@ -12,6 +12,9 @@ ENV/
 .env.local
 .env.*.local
 
+# Azure and azd
+.azure/
+
 # Logs
 logs/
 *.log

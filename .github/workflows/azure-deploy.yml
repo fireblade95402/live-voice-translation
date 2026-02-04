@@ -1,0 +1,70 @@
+# This workflow deploys the application to Azure Container Apps using azd
+# It runs on push to main branch or can be triggered manually
+
+name: Azure Deployment
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      AZURE_ENV_NAME: ${{ vars.AZURE_ENV_NAME }}
+      AZURE_LOCATION: ${{ vars.AZURE_LOCATION }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install azd
+        uses: Azure/setup-azd@v1.0.0
+
+      - name: Log in with Azure (Federated Credentials)
+        if: ${{ env.AZURE_CLIENT_ID != '' }}
+        run: |
+          azd auth login \
+            --client-id "$Env:AZURE_CLIENT_ID" \
+            --federated-credential-provider "github" \
+            --tenant-id "$Env:AZURE_TENANT_ID"
+        shell: pwsh
+
+      - name: Set Azure environment variables
+        run: |
+          azd env set AZURE_VOICELIVE_ENDPOINT "${{ secrets.AZURE_VOICELIVE_ENDPOINT }}"
+          azd env set AZURE_VOICELIVE_VOICE "${{ vars.AZURE_VOICELIVE_VOICE }}" || true
+          azd env set ENABLE_LOGGING "false"
+
+      - name: Provision Infrastructure
+        run: azd provision --no-prompt
+        env:
+          AZURE_ENV_NAME: ${{ vars.AZURE_ENV_NAME }}
+          AZURE_LOCATION: ${{ vars.AZURE_LOCATION }}
+          AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy Application
+        run: azd deploy --no-prompt
+
+      - name: Get deployment URL
+        id: get-url
+        run: |
+          echo "url=$(azd env get-values | grep AZURE_CONTAINER_APP_ENDPOINT | cut -d'=' -f2 | tr -d '"')" >> $GITHUB_OUTPUT
+
+      - name: Summary
+        run: |
+          echo "## Deployment Successful! 🚀" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Application URL:** ${{ steps.get-url.outputs.url }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** ${{ vars.AZURE_ENV_NAME }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Location:** ${{ vars.AZURE_LOCATION }}" >> $GITHUB_STEP_SUMMARY

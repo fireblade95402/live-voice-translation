@@ -1,0 +1,8 @@
+# Add Docker and deployment files
+Dockerfile
+.dockerignore
+
+# Azure and azd
+.azure/
+infra/
+azure.yaml

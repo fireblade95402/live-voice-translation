@@ -2,12 +2,16 @@ const newConversationButton = document.getElementById("newConversation");
 const pauseConversationButton = document.getElementById("pauseConversation");
 const statusEl = document.getElementById("status");
 const chatEl = document.getElementById("chat");
+const languageDisplayEl = document.getElementById("languageDisplay");
+const language1El = document.getElementById("language1");
+const language2El = document.getElementById("language2");
 
 let conversationActive = false;
 let conversationPaused = false;
 let socket;
 let currentUserMessage = null;
 let currentAssistantMessage = null;
+let languages = { lang1: null, lang2: null };
 
 function setStatus(message) {
   statusEl.textContent = message;
@@ -17,6 +21,34 @@ function clearConversation() {
   chatEl.innerHTML = "";
   currentUserMessage = null;
   currentAssistantMessage = null;
+  hideLanguages();
+}
+
+function hideLanguages() {
+  languageDisplayEl.style.display = "none";
+  languages = { lang1: null, lang2: null };
+}
+
+function showLanguages(lang1, lang2) {
+  languages.lang1 = lang1;
+  languages.lang2 = lang2;
+  language1El.textContent = lang1;
+  language2El.textContent = lang2;
+  languageDisplayEl.style.display = "flex";
+}
+
+function extractLanguages(text) {
+  // Pattern: "I will translate between [Language1] and [Language2]"
+  const pattern = /translate between ([A-Za-z\s]+) and ([A-Za-z\s]+)/i;
+  const match = text.match(pattern);
+  
+  if (match) {
+    return {
+      lang1: match[1].trim(),
+      lang2: match[2].trim()
+    };
+  }
+  return null;
 }
 
 function addMessage(role, text) {
@@ -175,6 +207,15 @@ function connectWebSocket() {
         appendToMessage(currentAssistantMessage, data.text || "");
         break;
       case "assistant_done":
+        // Check if this message contains language confirmation
+        console.log("Checking for languages in:", data.text);
+        if (data.text && !languages.lang1) {
+          const extractedLangs = extractLanguages(data.text);
+          console.log("Extracted languages:", extractedLangs);
+          if (extractedLangs) {
+            showLanguages(extractedLangs.lang1, extractedLangs.lang2);
+          }
+        }
         currentAssistantMessage = null;
         break;
       case "error":

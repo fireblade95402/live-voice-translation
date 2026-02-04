@@ -136,6 +136,45 @@ h1 {
   cursor: not-allowed;
 }
 
+.language-display {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 16px;
+  background: rgba(79, 70, 229, 0.1);
+  border: 1px solid rgba(79, 70, 229, 0.3);
+  border-radius: 12px;
+  align-items: center;
+}
+
+.language-label {
+  color: var(--muted);
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.language-pair {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.language-badge {
+  background: var(--accent);
+  color: white;
+  padding: 6px 14px;
+  border-radius: 8px;
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.language-arrow {
+  font-size: 1.2rem;
+  color: var(--accent);
+  font-weight: bold;
+}
+
 .status {
   color: var(--muted);
   font-size: 0.95rem;

@@ -451,11 +451,17 @@ function connectWebSocket() {
       case "assistant_done":
         // Check if this message contains language confirmation
         console.log("Checking for languages in:", data.text);
-        if (data.text && !languages.lang1) {
+        if (data.text) {
           const extractedLangs = extractLanguages(data.text);
           console.log("Extracted languages:", extractedLangs);
           if (extractedLangs) {
-            showLanguages(extractedLangs.lang1, extractedLangs.lang2);
+            // Update the UI if languages changed during the conversation
+            if (
+              extractedLangs.lang1 !== languages.lang1 ||
+              extractedLangs.lang2 !== languages.lang2
+            ) {
+              showLanguages(extractedLangs.lang1, extractedLangs.lang2);
+            }
           }
         }
         currentAssistantMessage = null;

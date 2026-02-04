@@ -12,6 +12,13 @@ let socket;
 let currentUserMessage = null;
 let currentAssistantMessage = null;
 let languages = { lang1: null, lang2: null };
+let audioContext = null;
+let audioWorklet = null;
+let mediaStream = null;
+let audioProcessor = null;
+let audioQueue = [];
+let isPlayingAudio = false;
+let nextPlayTime = 0;
 
 function setStatus(message) {
   statusEl.textContent = message;
@@ -27,6 +34,207 @@ function clearConversation() {
 function hideLanguages() {
   languageDisplayEl.style.display = "none";
   languages = { lang1: null, lang2: null };
+}
+
+function playAudio(audioDataBase64) {
+  if (!audioContext) {
+    console.warn("Audio context not initialized");
+    return;
+  }
+
+  try {
+    // Decode base64 to binary
+    const binaryString = atob(audioDataBase64);
+    const bytes = new Uint8Array(binaryString.length);
+    for (let i = 0; i < binaryString.length; i++) {
+      bytes[i] = binaryString.charCodeAt(i);
+    }
+
+    // Create AudioBuffer from PCM16 data (24kHz, mono)
+    const sampleRate = 24000;
+    const numSamples = bytes.length / 2; // 16-bit = 2 bytes per sample
+    const audioBuffer = audioContext.createBuffer(1, numSamples, sampleRate);
+    const channelData = audioBuffer.getChannelData(0);
+    
+    // Convert bytes to float32
+    const view = new DataView(bytes.buffer);
+    for (let i = 0; i < numSamples; i++) {
+      const int16 = view.getInt16(i * 2, true); // true for little-endian
+      channelData[i] = int16 / 32768.0; // Normalize to -1..1
+    }
+
+    // Add to queue instead of playing immediately
+    audioQueue.push(audioBuffer);
+    
+    // Start playing if not already playing
+    if (!isPlayingAudio) {
+      playNextAudioChunk();
+    }
+  } catch (error) {
+    console.error("Error playing audio:", error);
+  }
+}
+
+function playNextAudioChunk() {
+  if (audioQueue.length === 0) {
+    isPlayingAudio = false;
+    return;
+  }
+
+  isPlayingAudio = true;
+  const audioBuffer = audioQueue.shift();
+  
+  const source = audioContext.createBufferSource();
+  source.buffer = audioBuffer;
+  source.connect(audioContext.destination);
+  
+  // Calculate when to start this chunk
+  const currentTime = audioContext.currentTime;
+  const startTime = Math.max(currentTime, nextPlayTime);
+  
+  // Schedule the next chunk to play right after this one
+  nextPlayTime = startTime + audioBuffer.duration;
+  
+  // When this chunk finishes, play the next one
+  source.onended = () => {
+    playNextAudioChunk();
+  };
+  
+  source.start(startTime);
+}
+
+async function startMicrophoneCapture() {
+  try {
+    if (!audioContext) {
+      audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    }
+
+    console.log(`Audio context sample rate: ${audioContext.sampleRate}Hz`);
+
+    // Request microphone access (browser will use its native sample rate)
+    mediaStream = await navigator.mediaDevices.getUserMedia({ 
+      audio: {
+        channelCount: 1,
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true
+      }
+    });
+
+    console.log("Microphone access granted");
+
+    // Create audio nodes
+    const source = audioContext.createMediaStreamSource(mediaStream);
+    
+    // Create ScriptProcessor for real-time audio processing (4096 is ~170ms at 24kHz, must be power of 2)
+    audioProcessor = audioContext.createScriptProcessor(4096, 1, 1);
+    
+    let audioChunkCount = 0;
+    const targetSampleRate = 24000; // Azure VoiceLive expects 24kHz
+    const sourceSampleRate = audioContext.sampleRate;
+    
+    audioProcessor.onaudioprocess = (event) => {
+      audioChunkCount++;
+      if (audioChunkCount % 10 === 0) {
+        console.log(`Processing audio chunk #${audioChunkCount}`);
+      }
+      
+      const inputData = event.inputBuffer.getChannelData(0);
+      
+      // Resample if needed
+      let resampledData;
+      if (sourceSampleRate !== targetSampleRate) {
+        // Simple linear resampling
+        const ratio = targetSampleRate / sourceSampleRate;
+        const outputLength = Math.floor(inputData.length * ratio);
+        resampledData = new Float32Array(outputLength);
+        
+        for (let i = 0; i < outputLength; i++) {
+          const srcIndex = i / ratio;
+          const srcIndexFloor = Math.floor(srcIndex);
+          const srcIndexCeil = Math.min(srcIndexFloor + 1, inputData.length - 1);
+          const fraction = srcIndex - srcIndexFloor;
+          
+          resampledData[i] = inputData[srcIndexFloor] * (1 - fraction) + inputData[srcIndexCeil] * fraction;
+        }
+      } else {
+        resampledData = inputData;
+      }
+      
+      // Convert float32 to PCM16
+      const pcm16Data = new Int16Array(resampledData.length);
+      for (let i = 0; i < resampledData.length; i++) {
+        let s = Math.max(-1, Math.min(1, resampledData[i]));
+        pcm16Data[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+      }
+      
+      // Convert to base64
+      const uint8Data = new Uint8Array(pcm16Data.buffer);
+      let binaryString = '';
+      for (let i = 0; i < uint8Data.length; i++) {
+        binaryString += String.fromCharCode(uint8Data[i]);
+      }
+      const audioBase64 = btoa(binaryString);
+      
+      // Send to server
+      if (!conversationActive) {
+        return; // Don't send if not active
+      }
+      
+      if (conversationPaused) {
+        return; // Don't send if paused
+      }
+      
+      if (!socket) {
+        console.warn("No socket available");
+        return;
+      }
+      
+      if (socket.readyState !== WebSocket.OPEN) {
+        console.warn(`Socket not open: readyState=${socket.readyState}`);
+        return;
+      }
+      
+      try {
+        socket.send(JSON.stringify({
+          type: "audio",
+          data: audioBase64
+        }));
+        if (audioChunkCount % 10 === 0) {
+          console.log("Sent audio chunk");
+        }
+      } catch (error) {
+        console.error("Error sending audio:", error);
+      }
+    };
+    
+    // IMPORTANT: ScriptProcessor needs to be connected to process audio
+    // We use a disconnected destination (no actual playback) to avoid echo
+    const destination = audioContext.createMediaStreamDestination();
+    
+    // Connect: source -> processor -> destination (NOT to speakers)
+    source.connect(audioProcessor);
+    audioProcessor.connect(destination);
+    
+    console.log("Microphone capture started");
+  } catch (error) {
+    console.error("Error accessing microphone:", error);
+    setStatus("Microphone access denied");
+  }
+}
+
+function stopMicrophoneCapture() {
+  if (audioProcessor) {
+    audioProcessor.disconnect();
+    audioProcessor = null;
+  }
+  
+  if (mediaStream) {
+    mediaStream.getTracks().forEach(track => track.stop());
+    mediaStream = null;
+  }
+  
+  console.log("Microphone capture stopped");
 }
 
 function showLanguages(lang1, lang2) {
@@ -96,6 +304,9 @@ function startConversation({ clear = true, initialText, statusMessage } = {}) {
   updateControls();
   console.log("Sending start message");
 
+  // Start microphone capture
+  startMicrophoneCapture();
+
   const payload = { type: "start" };
   if (typeof initialText === "string") {
     payload.text = initialText;
@@ -104,6 +315,14 @@ function startConversation({ clear = true, initialText, statusMessage } = {}) {
 }
 
 function stopConversation({ setIdle = true } = {}) {
+  // Stop microphone capture
+  stopMicrophoneCapture();
+  
+  // Clear audio playback queue
+  audioQueue = [];
+  isPlayingAudio = false;
+  nextPlayTime = 0;
+  
   if (setIdle) {
     conversationActive = false;
     conversationPaused = false;
@@ -166,6 +385,10 @@ function connectWebSocket() {
     console.log("WebSocket connected");
     setStatus("Connected");
     updateControls();
+    // Initialize audio context when WebSocket opens
+    if (!audioContext) {
+      audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    }
   });
 
   socket.addEventListener("close", () => {
@@ -190,6 +413,10 @@ function connectWebSocket() {
     switch (data.type) {
       case "status":
         setStatus(data.message);
+        break;
+      case "audio":
+        // Handle audio playback
+        playAudio(data.data);
         break;
       case "transcript_delta":
         if (!currentUserMessage) {

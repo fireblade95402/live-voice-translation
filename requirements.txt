@@ -6,3 +6,5 @@ pyaudio
 fastapi
 uvicorn[standard]
 langdetect
+aiohttp
+websockets

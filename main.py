@@ -126,15 +126,24 @@ class AudioProcessor:
             self.seq_num = seq_num
             self.data = data
 
-    def __init__(self, connection):
+    def __init__(self, connection, emit_callback=None):
         self.connection = connection
-        self.audio = pyaudio.PyAudio()
-
+        self.emit_callback = emit_callback  # Callback to emit audio to web client
+        self.server_mode = os.environ.get('SERVER_MODE', 'false').lower() in ('true', '1', 'yes')
+        
         # Audio configuration - PCM16, 24kHz, mono as specified
-        self.format = pyaudio.paInt16
         self.channels = 1
         self.rate = 24000
         self.chunk_size = 1200 # 50ms
+        
+        if not self.server_mode:
+            self.audio = pyaudio.PyAudio()
+            self.format = pyaudio.paInt16
+            logger.info("AudioProcessor initialized with 24kHz PCM16 mono audio")
+        else:
+            self.audio = None
+            self.format = None
+            logger.info("Running in server mode - PyAudio disabled, audio handled by web client")
 
         # Capture and playback state
         self.input_stream = None
@@ -144,10 +153,12 @@ class AudioProcessor:
         self.next_seq_num = 0
         self.output_stream: Optional[pyaudio.Stream] = None
 
-        logger.info("AudioProcessor initialized with 24kHz PCM16 mono audio")
-
     def start_capture(self):
         """Start capturing audio from microphone."""
+        if self.server_mode:
+            logger.info("Server mode: Audio capture handled by web client")
+            return
+            
         def _capture_callback(
             in_data,      # data
             _frame_count,  # number of frames
@@ -183,6 +194,10 @@ class AudioProcessor:
 
     def start_playback(self):
         """Initialize audio playback system."""
+        if self.server_mode:
+            logger.info("Server mode: Audio playback handled by web client")
+            return
+            
         if self.output_stream:
             return
 
@@ -251,6 +266,21 @@ class AudioProcessor:
 
     def queue_audio(self, audio_data: Optional[bytes]) -> None:
         """Queue audio data for playback."""
+        if self.server_mode and self.emit_callback and audio_data:
+            # In server mode, send audio directly to web client
+            import base64
+            import asyncio
+            audio_base64 = base64.b64encode(audio_data).decode('utf-8')
+            
+            # Call the emit callback (handle both sync and async)
+            try:
+                result = self.emit_callback('audio', {'data': audio_base64})
+                if asyncio.iscoroutine(result):
+                    # Schedule the coroutine if it's async
+                    asyncio.create_task(result)
+            except Exception as e:
+                logger.error(f"Error emitting audio: {e}")
+        
         self.playback_queue.put(
             AudioProcessor.AudioPlaybackPacket(
                 seq_num=self._get_and_increase_seq_num(),
@@ -262,6 +292,10 @@ class AudioProcessor:
 
     def shutdown(self):
         """Clean up audio resources."""
+        if self.server_mode:
+            logger.info("Server mode: No audio resources to clean up")
+            return
+            
         if self.input_stream:
             self.input_stream.stop_stream()
             self.input_stream.close()
@@ -296,6 +330,7 @@ class BasicVoiceAssistant:
         instructions: str,
         initial_text: Optional[str] = None,
         event_callback: Optional[Callable[[str, dict], Union[None, Awaitable[None]]]] = None,
+        audio_callback: Optional[Callable[[str, dict], Union[None, Awaitable[None]]]] = None,
     ):
 
         self.endpoint = endpoint
@@ -309,6 +344,7 @@ class BasicVoiceAssistant:
         self._active_response = False
         self._response_api_done = False
         self._event_callback = event_callback
+        self._audio_callback = audio_callback
         self._user_transcript = ""
         self._assistant_transcript = ""
         self._detected_language: Optional[str] = None
@@ -365,8 +401,11 @@ class BasicVoiceAssistant:
                 conn = connection
                 self.connection = conn
 
+                # Notify that connection is ready for audio input
+                await self._emit("connection_ready", {"connection": conn})
+
                 # Initialize audio processor
-                ap = AudioProcessor(conn)
+                ap = AudioProcessor(conn, emit_callback=self._audio_callback)
                 self.audio_processor = ap
 
                 # Configure session for voice conversation
@@ -377,7 +416,7 @@ class BasicVoiceAssistant:
 
                 logger.info("Voice assistant ready! Start speaking...")
                 print("\n" + "=" * 60)
-                print("🎤 VOICE ASSISTANT READY")
+                print("[MIC] VOICE ASSISTANT READY")
                 print("Start speaking to begin conversation")
                 print("Press Ctrl+C to exit")
                 print("=" * 60 + "\n")
@@ -470,7 +509,7 @@ class BasicVoiceAssistant:
 
         elif event.type == ServerEventType.INPUT_AUDIO_BUFFER_SPEECH_STARTED:
             logger.info("User started speaking - stopping playback")
-            print("🎤 Listening...")
+            print("[MIC] Listening...")
             await self._emit("status", {"message": "Listening for speech..."})
 
             ap.skip_pending_audio()
@@ -502,12 +541,12 @@ class BasicVoiceAssistant:
             ap.queue_audio(event.delta)
 
         elif event.type == ServerEventType.RESPONSE_AUDIO_DONE:
-            logger.info("🤖 Assistant finished speaking")
-            print("🎤 Ready for next input...")
+            logger.info("[BOT] Assistant finished speaking")
+            print("[MIC] Ready for next input...")
             await self._emit("status", {"message": "Listening for speech..."})
 
         elif event.type == ServerEventType.RESPONSE_DONE:
-            logger.info("✅ Response complete")
+            logger.info("[OK] Response complete")
             self._active_response = False
             self._response_api_done = True
 
@@ -607,8 +646,12 @@ def main():
         logging.getLogger().setLevel(logging.DEBUG)
 
     # Create client with Azure token credential
-    credential: AsyncTokenCredential = AzureCliCredential()  # or DefaultAzureCredential() if needed
-    logger.info("Using Azure token credential")
+    # DefaultAzureCredential supports multiple auth methods:
+    # - Managed Identity (for Azure deployments)
+    # - Azure CLI (for local development)
+    # - Environment variables, etc.
+    credential: AsyncTokenCredential = DefaultAzureCredential()
+    logger.info("Using Azure DefaultAzureCredential")
 
     # Create and start voice assistant
     instructions = load_instructions()

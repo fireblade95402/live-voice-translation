@@ -7,7 +7,7 @@ from typing import Optional
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from azure.identity.aio import AzureCliCredential
+from azure.identity.aio import DefaultAzureCredential
 from azure.core.credentials_async import AsyncTokenCredential
 from dotenv import load_dotenv
 
@@ -33,6 +33,7 @@ class AssistantManager:
         self.websocket: Optional[WebSocket] = None
         self.task: Optional[asyncio.Task] = None
         self._initial_text: Optional[str] = None
+        self.voicelive_connection: Optional[object] = None  # Reference to VoiceLive connection
 
     async def connect(self, websocket: WebSocket) -> None:
         print("Manager.connect() called", flush=True)
@@ -75,7 +76,10 @@ class AssistantManager:
                 return
 
             print("Creating credential", flush=True)
-            credential: AsyncTokenCredential = AzureCliCredential()
+            # DefaultAzureCredential supports multiple auth methods:
+            # - Managed Identity (for Azure Container Apps)
+            # - Azure CLI (for local development)
+            credential: AsyncTokenCredential = DefaultAzureCredential()
 
             instructions = load_instructions()
 
@@ -88,6 +92,7 @@ class AssistantManager:
                 instructions=instructions,
                 initial_text=self._initial_text,
                 event_callback=self._send,
+                audio_callback=self._send,  # Pass the send method for audio events
             )
 
             print("Starting assistant", flush=True)
@@ -104,11 +109,24 @@ class AssistantManager:
     async def _send(self, event_type: str, payload: dict) -> None:
         if not self.websocket:
             return
+        
+        # Handle connection_ready event specially
+        if event_type == "connection_ready":
+            # Store the connection but don't send it to client
+            connection = payload.get("connection")
+            if connection:
+                self.voicelive_connection = connection
+            return
+        
         message = {"type": event_type, **payload}
         try:
             await self.websocket.send_json(message)
         except Exception:
             pass
+
+    def set_voicelive_connection(self, connection: object) -> None:
+        """Store the VoiceLive connection so we can send audio to it."""
+        self.voicelive_connection = connection
 
 
 manager = AssistantManager()
@@ -128,6 +146,29 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                 await manager.start(initial_text=data.get("text"))
             elif event_type == "stop":
                 await manager.stop()
+            elif event_type == "audio":
+                # Handle audio input from web client
+                audio_data = data.get("data")
+                if not audio_data:
+                    print("Audio message has no data", flush=True)
+                    continue
+                    
+                if not manager.voicelive_connection:
+                    print("No VoiceLive connection available", flush=True)
+                    continue
+                
+                try:
+                    await manager.voicelive_connection.input_audio_buffer.append(audio=audio_data)
+                    # Log every 50th audio chunk to avoid spam
+                    if not hasattr(manager, '_audio_count'):
+                        manager._audio_count = 0
+                    manager._audio_count += 1
+                    if manager._audio_count % 50 == 0:
+                        print(f"Sent {manager._audio_count} audio chunks to VoiceLive", flush=True)
+                except Exception as e:
+                    print(f"Error appending audio: {e}", flush=True)
+                    import traceback
+                    traceback.print_exc()
     except WebSocketDisconnect:
         await manager.disconnect()
     except Exception as e:

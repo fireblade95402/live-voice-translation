@@ -13,10 +13,16 @@ A real-time voice translation assistant powered by Azure OpenAI VoiceLive API. T
 
 ## Prerequisites
 
+**Local Development:**
 - Python 3.8+
 - Azure OpenAI VoiceLive API access (with valid credentials)
 - Microphone and speakers for audio input/output
 - [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli) for authentication
+
+**Azure Deployment:**
+- [Azure Developer CLI (azd)](https://learn.microsoft.com/azure/developer/azure-developer-cli/install-azd)
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/)
+- Azure subscription with Container Apps access
 
 ## Quick Start
 
@@ -378,6 +384,51 @@ mypy main.py server.py
 4. Commit changes to git
 
 See [INSTRUCTION_IMPROVEMENTS.md](INSTRUCTION_IMPROVEMENTS.md) for detailed guidance on improving agent behavior.
+
+## Azure Deployment
+
+Deploy to Azure Container Apps with a single command:
+
+```bash
+# Install Azure Developer CLI
+winget install microsoft.azd
+
+# Login and initialize
+azd auth login
+azd init
+
+# Set your VoiceLive endpoint
+azd env set AZURE_VOICELIVE_ENDPOINT "https://your-resource.services.ai.azure.com/"
+
+# Deploy to Azure
+azd up
+```
+
+**What gets deployed:**
+- Azure Container Registry (for Docker images)
+- Azure Container Apps Environment (managed platform)
+- Container App (your application)
+- Log Analytics workspace (monitoring)
+- Managed Identity (secure authentication)
+
+**Cost:** ~$5-10/month for development, scales automatically based on usage
+
+📚 **Full deployment guide:** [DEPLOYMENT.md](DEPLOYMENT.md)
+
+## Local Development vs Production
+
+The app automatically adapts:
+
+**Local Development:**
+- Uses Azure CLI credentials
+- Logs to files and console
+- Hot reload with `--reload`
+
+**Azure Container Apps:**
+- Uses Managed Identity (no credentials needed!)
+- Console logging only
+- Auto-scales based on traffic
+- Built-in SSL/TLS (HTTPS/WSS)
 
 ## Performance Tips
 

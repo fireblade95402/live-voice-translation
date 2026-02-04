@@ -21,8 +21,9 @@ body {
   font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
   background: var(--bg);
   color: var(--text);
-  min-height: 100vh;
+  height: 100vh;
   padding: 16px;
+  overflow: hidden;
 }
 
 .app {
@@ -31,11 +32,14 @@ body {
   gap: 16px;
   max-width: 720px;
   margin: 0 auto;
-  height: 100vh;
+  height: 100%;
+  overflow: hidden;
 }
 
 .header {
   padding: 8px 4px;
+  flex-shrink: 0;
+  min-height: 0;
 }
 
 .brand {
@@ -66,13 +70,16 @@ h1 {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  flex-shrink: 0;
+  min-height: 0;
 }
 
 .control-row {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   gap: 12px;
-  align-items: flex-start;
+  align-items: center;
+  flex-wrap: wrap;
 }
 
 .language-status {
@@ -188,11 +195,13 @@ h1 {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  min-height: 0;
 }
 
 .chat-messages {
   flex: 1;
   overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
   padding: 16px;
   display: flex;
   flex-direction: column;

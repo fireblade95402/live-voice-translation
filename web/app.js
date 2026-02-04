@@ -28,7 +28,6 @@ function clearConversation() {
   chatEl.innerHTML = "";
   currentUserMessage = null;
   currentAssistantMessage = null;
-  hideLanguages();
 }
 
 function hideLanguages() {
@@ -269,14 +268,30 @@ function addMessage(role, text) {
   
   messageDiv.appendChild(bubble);
   chatEl.appendChild(messageDiv);
-  chatEl.scrollTop = chatEl.scrollHeight;
+  
+  // Scroll to bottom to show the latest message (iOS Safari compatible)
+  scrollToBottom();
   
   return bubble;
 }
 
 function appendToMessage(bubble, text) {
   bubble.textContent += text;
-  chatEl.scrollTop = chatEl.scrollHeight;
+  
+  // Keep scrolled to bottom as text is appended
+  scrollToBottom();
+}
+
+function scrollToBottom() {
+  // Use multiple methods to ensure iOS Safari scrolls correctly
+  requestAnimationFrame(() => {
+    chatEl.scrollTop = chatEl.scrollHeight;
+    
+    // Force another scroll after a brief delay for iOS Safari
+    setTimeout(() => {
+      chatEl.scrollTop = chatEl.scrollHeight;
+    }, 10);
+  });
 }
 
 function updateControls() {

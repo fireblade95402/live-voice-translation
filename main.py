@@ -506,6 +506,8 @@ class BasicVoiceAssistant:
             if self._initial_text and not self._initial_text_sent:
                 self._initial_text_sent = True
                 await self._send_text_message(self._initial_text)
+                # Clear initial text after sending to prevent resending on interruption
+                self._initial_text = None
 
         elif event.type == ServerEventType.INPUT_AUDIO_BUFFER_SPEECH_STARTED:
             logger.info("User started speaking - stopping playback")

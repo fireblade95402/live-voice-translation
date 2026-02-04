@@ -255,18 +255,9 @@ h1 {
 }
 
 @media (max-width: 768px) {
-  .app {
-    height: auto;
-  }
-
-  .chat-messages {
-    min-height: 300px;
-  }
-
   .bubble {
     max-width: 95%;
   }
-}
 }
 
 .status {

@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 import os
+import re
 import sys
 import argparse
 import asyncio
@@ -30,6 +31,7 @@ from azure.identity.aio import AzureCliCredential, DefaultAzureCredential
 from azure.ai.voicelive.aio import connect
 from azure.ai.voicelive.models import (
     AudioEchoCancellation,
+    AudioInputTranscriptionOptions,
     AudioNoiseReduction,
     AzureStandardVoice,
     InputTextContentPart,
@@ -350,6 +352,14 @@ class BasicVoiceAssistant:
         self._detected_language: Optional[str] = None
         self._initial_text = initial_text
         self._initial_text_sent = False
+        # Confirmed translation language pair (set after MODE-A confirmation).
+        self._lang_a: Optional[str] = None
+        self._lang_b: Optional[str] = None
+        # Last completed user transcript, used by the echo guard.
+        self._last_user_text: str = ""
+        # When > 0, suppress the next N completed assistant responses (used by the echo guard
+        # to silently drop a corrective re-translation if it ALSO echoes).
+        self._suppress_next_responses: int = 0
 
     async def _emit(self, event_type: str, payload: dict) -> None:
         if not self._event_callback:
@@ -386,6 +396,106 @@ class BasicVoiceAssistant:
             }
             self._detected_language = language_map.get(lang, lang)
         return self._detected_language
+
+    # ------------------------------------------------------------------
+    # Echo-guard helpers
+    # ------------------------------------------------------------------
+    _LANG_CONFIRM_RE = re.compile(
+        r"translate\s+between\s+([A-Za-z\u00C0-\u024F]+)\s+and\s+([A-Za-z\u00C0-\u024F]+)",
+        re.IGNORECASE,
+    )
+
+    async def _maybe_capture_language_pair(self, assistant_text: str) -> None:
+        """Parse 'I will translate between X and Y' from MODE-A confirmation."""
+        if self._lang_a and self._lang_b:
+            return
+        m = self._LANG_CONFIRM_RE.search(assistant_text or "")
+        if not m:
+            return
+        self._lang_a = m.group(1).strip().capitalize()
+        self._lang_b = m.group(2).strip().capitalize()
+        logger.info("Captured translation pair: %s <-> %s", self._lang_a, self._lang_b)
+
+    @staticmethod
+    def _detect_lang_code(text: str) -> Optional[str]:
+        text = (text or "").strip()
+        if len(text) < 3:
+            return None
+        try:
+            return detect(text)
+        except LangDetectException:
+            return None
+
+    @staticmethod
+    def _lang_name_to_code(name: Optional[str]) -> Optional[str]:
+        if not name:
+            return None
+        m = {
+            "english": "en", "spanish": "es", "french": "fr", "german": "de",
+            "italian": "it", "portuguese": "pt", "japanese": "ja", "korean": "ko",
+            "chinese": "zh-cn", "mandarin": "zh-cn", "arabic": "ar", "russian": "ru",
+            "hindi": "hi", "dutch": "nl", "polish": "pl", "swedish": "sv",
+            "turkish": "tr", "greek": "el",
+        }
+        return m.get(name.lower())
+
+    async def _echo_guard(self, assistant_text: str) -> None:
+        """If the assistant just produced output in the same language as the user's last input,
+        cancel it and force a re-translation into the OTHER confirmed language."""
+        if self._suppress_next_responses > 0:
+            self._suppress_next_responses -= 1
+            return
+        if not (self._lang_a and self._lang_b and self._last_user_text):
+            return
+
+        user_code = self._detect_lang_code(self._last_user_text)
+        asst_code = self._detect_lang_code(assistant_text)
+        if not user_code or not asst_code:
+            return
+
+        # Compare on the primary language tag (drop region).
+        if user_code.split("-")[0] != asst_code.split("-")[0]:
+            return  # different languages -> good, no echo
+
+        logger.warning(
+            "Echo detected: user=%r (%s) asst=%r (%s). Forcing retranslation.",
+            self._last_user_text, user_code, assistant_text, asst_code,
+        )
+
+        # Decide target language = the one that is NOT the user's input language.
+        code_a = self._lang_name_to_code(self._lang_a)
+        code_b = self._lang_name_to_code(self._lang_b)
+        if code_a and user_code.startswith(code_a):
+            target = self._lang_b
+        elif code_b and user_code.startswith(code_b):
+            target = self._lang_a
+        else:
+            # Couldn't map; default to "the other" via heuristic
+            target = self._lang_b if asst_code.startswith(code_a or "") else self._lang_a
+
+        # Stop the audio that's currently being echoed back to the user.
+        if self.audio_processor:
+            self.audio_processor.skip_pending_audio()
+
+        # Inject a corrective system-style user message that forces a retranslation.
+        # Mark the next assistant response as suppress=False (we DO want the corrected output)
+        # but if THAT one also echoes, we drop it to avoid loops.
+        conn = self.connection
+        if conn is None:
+            return
+        try:
+            corrective = (
+                f"SYSTEM CORRECTION: Your previous output was in the same language as the user. "
+                f"Translate the following user utterance into {target} ONLY. Output ONLY the "
+                f"translation, no prefix, no commentary:\n\n\"{self._last_user_text}\""
+            )
+            item = UserMessageItem(content=[InputTextContentPart(text=corrective)])
+            await conn.conversation.item.create(item=item)
+            await conn.response.create()
+            # Suppress the guard for the NEXT completion so we don't loop on a borderline detection.
+            self._suppress_next_responses = 1
+        except Exception:
+            logger.exception("Failed to inject corrective retranslation")
 
     async def start(self):
         """Start the voice assistant session."""
@@ -442,10 +552,21 @@ class BasicVoiceAssistant:
             voice_config = self.voice
 
         # Create turn detection configuration
+        # Longer silence_duration_ms reduces mid-sentence cutoffs that get echoed back verbatim.
         turn_detection_config = ServerVad(
             threshold=0.5,
             prefix_padding_ms=300,
-            silence_duration_ms=500)
+            silence_duration_ms=800)
+
+        # Explicit transcription model. Without this, the realtime model relies on its own
+        # internal language detection, which on short/ambiguous utterances can misclassify
+        # the source language and cause the model to "translate" text into the same language
+        # it was already in (i.e. echo the original phrase).
+        transcription_language = os.environ.get("AZURE_VOICELIVE_TRANSCRIPTION_LANGUAGE")  # e.g. "en,es"
+        transcription_config = AudioInputTranscriptionOptions(
+            model=os.environ.get("AZURE_VOICELIVE_TRANSCRIPTION_MODEL", "gpt-4o-transcribe"),
+            language=transcription_language,
+        )
 
         # Create session configuration
         session_config = RequestSession(
@@ -455,8 +576,10 @@ class BasicVoiceAssistant:
             input_audio_format=InputAudioFormat.PCM16,
             output_audio_format=OutputAudioFormat.PCM16,
             turn_detection=turn_detection_config,
+            input_audio_transcription=transcription_config,
             input_audio_echo_cancellation=AudioEchoCancellation(),
             input_audio_noise_reduction=AudioNoiseReduction(type="azure_deep_noise_suppression"),
+            temperature=float(os.environ.get("AZURE_VOICELIVE_TEMPERATURE", "0.2")),
         )
 
         conn = self.connection
@@ -572,6 +695,7 @@ class BasicVoiceAssistant:
         elif event.type == ServerEventType.CONVERSATION_ITEM_INPUT_AUDIO_TRANSCRIPTION_COMPLETED:
             text = getattr(event, "transcript", None) or self._user_transcript
             if text:
+                self._last_user_text = text
                 await self._emit("transcript_done", {"text": text})
                 detected = self._maybe_detect_language(text)
                 if detected:
@@ -588,6 +712,7 @@ class BasicVoiceAssistant:
             text = getattr(event, "text", None) or self._assistant_transcript
             if text:
                 await self._emit("assistant_done", {"text": text})
+                await self._maybe_capture_language_pair(text)
             self._assistant_transcript = ""
 
         elif event.type == ServerEventType.RESPONSE_AUDIO_TRANSCRIPT_DELTA:
@@ -600,6 +725,8 @@ class BasicVoiceAssistant:
             text = getattr(event, "text", None) or self._assistant_transcript
             if text:
                 await self._emit("assistant_done", {"text": text})
+                await self._maybe_capture_language_pair(text)
+                await self._echo_guard(text)
             self._assistant_transcript = ""
 
         else:

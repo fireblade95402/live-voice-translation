@@ -88,7 +88,7 @@ class AssistantManager:
                 endpoint=endpoint,
                 credential=credential,
                 model=os.environ.get("AZURE_VOICELIVE_MODEL", "gpt-realtime"),
-                voice=os.environ.get("AZURE_VOICELIVE_VOICE", "en-US-Ava:DragonHDLatestNeural"),
+                voice=os.environ.get("AZURE_VOICELIVE_VOICE", "en-US-AvaMultilingualNeural"),
                 instructions=instructions,
                 initial_text=self._initial_text,
                 event_callback=self._send,

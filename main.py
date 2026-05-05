@@ -331,6 +331,7 @@ class BasicVoiceAssistant:
         initial_text: Optional[str] = None,
         event_callback: Optional[Callable[[str, dict], Union[None, Awaitable[None]]]] = None,
         audio_callback: Optional[Callable[[str, dict], Union[None, Awaitable[None]]]] = None,
+        session_overrides: Optional[dict] = None,
     ):
 
         self.endpoint = endpoint
@@ -338,6 +339,8 @@ class BasicVoiceAssistant:
         self.model = model
         self.voice = voice
         self.instructions = instructions
+        # Optional tunables for session config (VAD, noise reduction, echo cancel, etc.)
+        self.session_overrides = session_overrides or {}
         self.connection: Optional["VoiceLiveConnection"] = None
         self.audio_processor: Optional[AudioProcessor] = None
         self.session_ready = False
@@ -441,11 +444,22 @@ class BasicVoiceAssistant:
             # OpenAI voice (alloy, echo, fable, onyx, nova, shimmer)
             voice_config = self.voice
 
-        # Create turn detection configuration
+        # Create turn detection configuration (overridable)
+        ov = self.session_overrides
         turn_detection_config = ServerVad(
-            threshold=0.5,
-            prefix_padding_ms=300,
-            silence_duration_ms=500)
+            threshold=float(ov.get("vad_threshold", 0.5)),
+            prefix_padding_ms=int(ov.get("prefix_padding_ms", 300)),
+            silence_duration_ms=int(ov.get("silence_duration_ms", 500)),
+        )
+
+        echo_cancel = (
+            AudioEchoCancellation() if ov.get("echo_cancellation", True) else None
+        )
+        noise_reduction = (
+            AudioNoiseReduction(type=ov.get("noise_reduction_type", "azure_deep_noise_suppression"))
+            if ov.get("noise_reduction", True)
+            else None
+        )
 
         # Create session configuration
         session_config = RequestSession(
@@ -455,8 +469,8 @@ class BasicVoiceAssistant:
             input_audio_format=InputAudioFormat.PCM16,
             output_audio_format=OutputAudioFormat.PCM16,
             turn_detection=turn_detection_config,
-            input_audio_echo_cancellation=AudioEchoCancellation(),
-            input_audio_noise_reduction=AudioNoiseReduction(type="azure_deep_noise_suppression"),
+            input_audio_echo_cancellation=echo_cancel,
+            input_audio_noise_reduction=noise_reduction,
         )
 
         conn = self.connection

@@ -315,17 +315,29 @@ function extractLanguages(text) {
 function addMessage(role, text) {
   const messageDiv = document.createElement("div");
   messageDiv.className = `message ${role}`;
-  
+
+  const column = document.createElement("div");
+  column.className = "message-column";
+
+  const tag = document.createElement("div");
+  tag.className = "message-tag";
+  const roleLabel = role === "user" ? "\uD83C\uDFA4 Spoken" : "\uD83C\uDF10 Translated";
+  const langName = role === "user" ? (languages.lang1 || "") : (languages.lang2 || "");
+  const langChipHtml = langName ? `<span class="lang-chip">${langName}</span>` : "";
+  tag.innerHTML = `<span>${roleLabel}</span>${langChipHtml}`;
+
   const bubble = document.createElement("div");
   bubble.className = `bubble ${role}`;
   bubble.textContent = text;
-  
-  messageDiv.appendChild(bubble);
+
+  column.appendChild(tag);
+  column.appendChild(bubble);
+  messageDiv.appendChild(column);
   chatEl.appendChild(messageDiv);
-  
+
   // Scroll to bottom to show the latest message (iOS Safari compatible)
   scrollToBottom();
-  
+
   return bubble;
 }
 
@@ -494,6 +506,14 @@ function connectWebSocket() {
         appendToMessage(currentUserMessage, data.text || "");
         break;
       case "transcript_done":
+        // Some transcription models only emit the final text (no deltas).
+        // Make sure the user bubble appears with the final transcript.
+        if (!currentUserMessage && data.text) {
+          currentUserMessage = addMessage("user", data.text);
+        } else if (currentUserMessage && data.text && !currentUserMessage.textContent) {
+          currentUserMessage.textContent = data.text;
+          scrollToBottom();
+        }
         currentUserMessage = null;
         break;
       case "assistant_delta":

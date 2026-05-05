@@ -30,6 +30,7 @@ from azure.identity.aio import AzureCliCredential, DefaultAzureCredential
 from azure.ai.voicelive.aio import connect
 from azure.ai.voicelive.models import (
     AudioEchoCancellation,
+    AudioInputTranscriptionOptions,
     AudioNoiseReduction,
     AzureStandardVoice,
     InputTextContentPart,
@@ -461,6 +462,23 @@ class BasicVoiceAssistant:
             else None
         )
 
+        # Transcribe the user's spoken input so the UI can show the original text
+        # alongside the translated assistant response. Leave `language` unset by
+        # default so the service auto-detects; the supported languages list only
+        # accepts a single ISO-639-1 code (not a comma-separated list), so set
+        # VOICELIVE_TRANSCRIPTION_LANGUAGE to one of: af, ar, az, be, bg, bs,
+        # ca, cs, cy, da, de, el, en, es, et, fa, fi, fr, gl, he, hi, hr, hu,
+        # hy, id, is, it, ja, kk, kn, ko, lt, lv, mi, mk, mr, ms, ne, nl, no,
+        # pl, pt, ro, ru, sk, sl, sr, sv, sw, ta, th, tl, tr, uk, ur, vi, zh.
+        transcription_model = os.environ.get(
+            "VOICELIVE_TRANSCRIPTION_MODEL", "gpt-4o-mini-transcribe"
+        )
+        transcription_language = os.environ.get("VOICELIVE_TRANSCRIPTION_LANGUAGE") or None
+        input_transcription = AudioInputTranscriptionOptions(
+            model=transcription_model,
+            language=transcription_language,
+        )
+
         # Create session configuration
         session_config = RequestSession(
             modalities=[Modality.TEXT, Modality.AUDIO],
@@ -471,6 +489,7 @@ class BasicVoiceAssistant:
             turn_detection=turn_detection_config,
             input_audio_echo_cancellation=echo_cancel,
             input_audio_noise_reduction=noise_reduction,
+            input_audio_transcription=input_transcription,
         )
 
         conn = self.connection
@@ -579,18 +598,26 @@ class BasicVoiceAssistant:
 
         elif event.type == ServerEventType.CONVERSATION_ITEM_INPUT_AUDIO_TRANSCRIPTION_DELTA:
             delta = getattr(event, "delta", "") or ""
+            logger.info("User transcription delta: %r", delta)
             if delta:
                 self._user_transcript += delta
                 await self._emit("transcript_delta", {"text": delta})
 
         elif event.type == ServerEventType.CONVERSATION_ITEM_INPUT_AUDIO_TRANSCRIPTION_COMPLETED:
             text = getattr(event, "transcript", None) or self._user_transcript
+            logger.info("User transcription completed: %r", text)
             if text:
                 await self._emit("transcript_done", {"text": text})
                 detected = self._maybe_detect_language(text)
                 if detected:
                     await self._emit("language", {"language": detected})
             self._user_transcript = ""
+
+        elif event.type == ServerEventType.CONVERSATION_ITEM_INPUT_AUDIO_TRANSCRIPTION_FAILED:
+            err = getattr(event, "error", None)
+            err_msg = getattr(err, "message", str(err)) if err else "unknown"
+            logger.warning("User transcription FAILED: %s", err_msg)
+            await self._emit("status", {"message": f"Transcription failed: {err_msg}"})
 
         elif event.type == ServerEventType.RESPONSE_TEXT_DELTA:
             delta = getattr(event, "delta", "") or ""

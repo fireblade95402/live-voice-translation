@@ -34,10 +34,13 @@ def _build_session_overrides() -> dict:
 
     Mirrors the Foundry Playground 'Advanced settings' (VAD, audio enhancement).
     """
+    # Defaults tuned for translation: avoid splitting a single utterance into
+    # two turns when the speaker briefly pauses mid-sentence. If only the second
+    # half of a sentence gets translated, increase VOICELIVE_VAD_SILENCE_MS.
     return {
-        "vad_threshold": float(os.environ.get("VOICELIVE_VAD_THRESHOLD", "0.5")),
+        "vad_threshold": float(os.environ.get("VOICELIVE_VAD_THRESHOLD", "0.6")),
         "prefix_padding_ms": int(os.environ.get("VOICELIVE_VAD_PREFIX_PADDING_MS", "300")),
-        "silence_duration_ms": int(os.environ.get("VOICELIVE_VAD_SILENCE_MS", "500")),
+        "silence_duration_ms": int(os.environ.get("VOICELIVE_VAD_SILENCE_MS", "1000")),
         "echo_cancellation": _env_bool("VOICELIVE_ECHO_CANCELLATION", True),
         "noise_reduction": _env_bool("VOICELIVE_NOISE_REDUCTION", True),
         "noise_reduction_type": os.environ.get(

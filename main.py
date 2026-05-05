@@ -471,7 +471,7 @@ class BasicVoiceAssistant:
         # hy, id, is, it, ja, kk, kn, ko, lt, lv, mi, mk, mr, ms, ne, nl, no,
         # pl, pt, ro, ru, sk, sl, sr, sv, sw, ta, th, tl, tr, uk, ur, vi, zh.
         transcription_model = os.environ.get(
-            "VOICELIVE_TRANSCRIPTION_MODEL", "gpt-4o-mini-transcribe"
+            "VOICELIVE_TRANSCRIPTION_MODEL", "gpt-4o-transcribe"
         )
         transcription_language = os.environ.get("VOICELIVE_TRANSCRIPTION_LANGUAGE") or None
         input_transcription = AudioInputTranscriptionOptions(

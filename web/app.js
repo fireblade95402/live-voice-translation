@@ -1,5 +1,6 @@
 const newConversationButton = document.getElementById("newConversation");
 const pauseConversationButton = document.getElementById("pauseConversation");
+const muteMicButton = document.getElementById("muteMic");
 const statusEl = document.getElementById("status");
 const chatEl = document.getElementById("chat");
 const languageDisplayEl = document.getElementById("languageDisplay");
@@ -8,6 +9,7 @@ const language2El = document.getElementById("language2");
 
 let conversationActive = false;
 let conversationPaused = false;
+let micMuted = false;
 let socket;
 let currentUserMessage = null;
 let currentAssistantMessage = null;
@@ -235,7 +237,11 @@ async function startMicrophoneCapture() {
       if (conversationPaused) {
         return; // Don't send if paused
       }
-      
+
+      if (micMuted) {
+        return; // Don't send if muted
+      }
+
       if (!socket) {
         console.warn("No socket available");
         return;
@@ -364,11 +370,18 @@ function updateControls() {
   if (!conversationActive) {
     pauseConversationButton.disabled = true;
     pauseConversationButton.textContent = "Pause";
+    muteMicButton.disabled = true;
+    muteMicButton.textContent = "Mute Mic";
+    muteMicButton.setAttribute("aria-pressed", "false");
+    micMuted = false;
     return;
   }
 
   pauseConversationButton.disabled = false;
   pauseConversationButton.textContent = conversationPaused ? "Resume" : "Pause";
+  muteMicButton.disabled = conversationPaused;
+  muteMicButton.textContent = micMuted ? "Unmute Mic" : "Mute Mic";
+  muteMicButton.setAttribute("aria-pressed", micMuted ? "true" : "false");
 }
 
 function startConversation({ clear = true, initialText, statusMessage } = {}) {
@@ -449,6 +462,15 @@ pauseConversationButton.addEventListener("click", () => {
   } else {
     pauseConversation();
   }
+});
+
+muteMicButton.addEventListener("click", () => {
+  if (!conversationActive || conversationPaused) {
+    return;
+  }
+  micMuted = !micMuted;
+  setStatus(micMuted ? "Mic muted" : "Listening for speech...");
+  updateControls();
 });
 
 function appendText(el, text) {

@@ -38,7 +38,10 @@ def _build_session_overrides() -> dict:
     # two turns when the speaker briefly pauses mid-sentence. If only the second
     # half of a sentence gets translated, increase VOICELIVE_VAD_SILENCE_MS.
     return {
-        "vad_threshold": float(os.environ.get("VOICELIVE_VAD_THRESHOLD", "0.6")),
+        # Higher default threshold (0.8) reduces pickup of ambient/background
+        # speech (e.g. people talking in another room, TVs). Lower if your own
+        # speech is being missed.
+        "vad_threshold": float(os.environ.get("VOICELIVE_VAD_THRESHOLD", "0.8")),
         "prefix_padding_ms": int(os.environ.get("VOICELIVE_VAD_PREFIX_PADDING_MS", "300")),
         "silence_duration_ms": int(os.environ.get("VOICELIVE_VAD_SILENCE_MS", "1000")),
         "echo_cancellation": _env_bool("VOICELIVE_ECHO_CANCELLATION", True),

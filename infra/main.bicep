@@ -17,11 +17,41 @@ param location string
 @description('Azure VoiceLive API endpoint')
 param azureVoiceliveEndpoint string
 
+@description('Azure VoiceLive realtime model deployment name')
+param azureVoiceliveModel string = 'gpt-realtime'
+
 @description('Azure VoiceLive Voice setting')
-param azureVoiceliveVoice string = 'en-US-Ava:DragonHDLatestNeural'
+param azureVoiceliveVoice string = 'en-US-AvaMultilingualNeural'
 
 @description('Enable logging to files')
 param enableLogging string = 'false'
+
+@description('Enable user-input transcription (the "Spoken" bubble)')
+param enableInputTranscription string = 'true'
+
+@description('Transcription model: azure-speech | gpt-4o-transcribe | gpt-4o-mini-transcribe | whisper-1')
+param voiceliveTranscriptionModel string = 'gpt-4o-transcribe'
+
+@description('Transcription language hint (BCP-47 for azure-speech, ISO-639-1 for gpt-4o/whisper)')
+param voiceliveTranscriptionLanguage string = 'en-US'
+
+@description('VAD threshold (0.0-1.0). Higher = stricter.')
+param voiceliveVadThreshold string = '0.8'
+
+@description('Padding (ms) added before detected speech.')
+param voiceliveVadPrefixPaddingMs string = '300'
+
+@description('Silence (ms) required to end a turn.')
+param voiceliveVadSilenceMs string = '1000'
+
+@description('Acoustic echo cancellation (true/false).')
+param voiceliveEchoCancellation string = 'true'
+
+@description('Noise reduction (true/false).')
+param voiceliveNoiseReduction string = 'true'
+
+@description('Noise reduction algorithm.')
+param voiceliveNoiseReductionType string = 'azure_deep_noise_suppression'
 
 @description('Azure OpenAI/Cognitive Services resource ID for role assignment')
 param cognitiveServicesResourceId string = ''
@@ -65,6 +95,10 @@ module containerApp './core/host/container-app.bicep' = {
         secretRef: 'voicelive-endpoint'
       }
       {
+        name: 'AZURE_VOICELIVE_MODEL'
+        value: azureVoiceliveModel
+      }
+      {
         name: 'AZURE_VOICELIVE_VOICE'
         value: azureVoiceliveVoice
       }
@@ -75,6 +109,42 @@ module containerApp './core/host/container-app.bicep' = {
       {
         name: 'ENABLE_LOGGING'
         value: enableLogging
+      }
+      {
+        name: 'ENABLE_INPUT_TRANSCRIPTION'
+        value: enableInputTranscription
+      }
+      {
+        name: 'VOICELIVE_TRANSCRIPTION_MODEL'
+        value: voiceliveTranscriptionModel
+      }
+      {
+        name: 'VOICELIVE_TRANSCRIPTION_LANGUAGE'
+        value: voiceliveTranscriptionLanguage
+      }
+      {
+        name: 'VOICELIVE_VAD_THRESHOLD'
+        value: voiceliveVadThreshold
+      }
+      {
+        name: 'VOICELIVE_VAD_PREFIX_PADDING_MS'
+        value: voiceliveVadPrefixPaddingMs
+      }
+      {
+        name: 'VOICELIVE_VAD_SILENCE_MS'
+        value: voiceliveVadSilenceMs
+      }
+      {
+        name: 'VOICELIVE_ECHO_CANCELLATION'
+        value: voiceliveEchoCancellation
+      }
+      {
+        name: 'VOICELIVE_NOISE_REDUCTION'
+        value: voiceliveNoiseReduction
+      }
+      {
+        name: 'VOICELIVE_NOISE_REDUCTION_TYPE'
+        value: voiceliveNoiseReductionType
       }
       {
         name: 'SERVER_MODE'

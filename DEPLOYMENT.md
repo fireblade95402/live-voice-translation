@@ -48,16 +48,28 @@ azd init
 
 ### 2. Set Required Environment Variables
 
+Only the endpoint is required. Everything else has a working default.
+
 ```bash
-# Set your Azure VoiceLive endpoint
+# REQUIRED: your Azure VoiceLive / Foundry endpoint
 azd env set AZURE_VOICELIVE_ENDPOINT "https://your-resource.services.ai.azure.com/"
 
-# Optional: Customize voice (defaults to en-US-Ava:DragonHDLatestNeural)
-azd env set AZURE_VOICELIVE_VOICE "en-US-Ava:DragonHDLatestNeural"
+# Optional overrides (defaults shown)
+azd env set AZURE_VOICELIVE_MODEL "gpt-realtime"
+azd env set AZURE_VOICELIVE_VOICE "en-US-AvaMultilingualNeural"
 
-# Optional: Enable file logging (defaults to false in production)
+# Optional: file logging (defaults to false in production)
 azd env set ENABLE_LOGGING "false"
+
+# Optional: input transcription / VAD tuning (defaults work fine)
+azd env set ENABLE_INPUT_TRANSCRIPTION "true"
+azd env set VOICELIVE_TRANSCRIPTION_MODEL "gpt-4o-transcribe"
+azd env set VOICELIVE_TRANSCRIPTION_LANGUAGE "en-US"
+azd env set VOICELIVE_VAD_THRESHOLD "0.8"
+azd env set VOICELIVE_VAD_SILENCE_MS "1000"
 ```
+
+See [.env.example](.env.example) for the complete list with descriptions.
 
 ### 3. Deploy to Azure
 
@@ -127,18 +139,47 @@ azd monitor
 
 ## Environment Variables
 
-The deployment uses these environment variables:
+All variables are optional except `AZURE_VOICELIVE_ENDPOINT`. Defaults are
+applied via `infra/main.parameters.json` and propagated to the Container App.
+
+### Azure VoiceLive
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `AZURE_VOICELIVE_ENDPOINT` | Yes | - | Your Azure VoiceLive API endpoint |
-| `AZURE_VOICELIVE_VOICE` | No | `en-US-Ava:DragonHDLatestNeural` | TTS voice for responses |
-| `ENABLE_LOGGING` | No | `false` | Enable file logging |
-| `AZURE_VOICELIVE_INSTRUCTIONS_FILE` | No | `system_instructions.txt` | Path to instructions |
+| `AZURE_VOICELIVE_ENDPOINT` | Yes | - | Azure VoiceLive / Foundry endpoint URL |
+| `AZURE_VOICELIVE_MODEL` | No | `gpt-realtime` | Realtime model deployment name |
+| `AZURE_VOICELIVE_VOICE` | No | `en-US-AvaMultilingualNeural` | TTS voice for responses |
+| `AZURE_VOICELIVE_INSTRUCTIONS_FILE` | No | `system_instructions.txt` | Path to instructions file (set in Bicep) |
 
-Set environment variables:
+### Logging
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `ENABLE_LOGGING` | No | `false` | Write `.log` files inside the container (usually off in prod) |
+
+### Input transcription ("Spoken" bubble)
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `ENABLE_INPUT_TRANSCRIPTION` | No | `true` | Master switch for the "Spoken" bubble |
+| `VOICELIVE_TRANSCRIPTION_MODEL` | No | `gpt-4o-transcribe` | `azure-speech` \| `gpt-4o-transcribe` \| `gpt-4o-mini-transcribe` \| `whisper-1` |
+| `VOICELIVE_TRANSCRIPTION_LANGUAGE` | No | `en-US` | BCP-47 (azure-speech, comma-separated OK) or ISO-639-1 (others) |
+
+### VAD / audio enhancement
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `VOICELIVE_VAD_THRESHOLD` | No | `0.8` | 0.0-1.0; higher ignores more background speech |
+| `VOICELIVE_VAD_PREFIX_PADDING_MS` | No | `300` | Padding (ms) before detected speech |
+| `VOICELIVE_VAD_SILENCE_MS` | No | `1000` | Silence (ms) required to end a turn |
+| `VOICELIVE_ECHO_CANCELLATION` | No | `true` | Acoustic echo cancellation |
+| `VOICELIVE_NOISE_REDUCTION` | No | `true` | Noise reduction |
+| `VOICELIVE_NOISE_REDUCTION_TYPE` | No | `azure_deep_noise_suppression` | Noise reduction algorithm |
+
+Set/override any of them via:
 ```bash
 azd env set <VARIABLE_NAME> "<value>"
+azd up   # or: azd deploy
 ```
 
 ## Infrastructure Details

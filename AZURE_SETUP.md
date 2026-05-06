@@ -142,15 +142,31 @@ When you run `azd up`, it creates:
 
 ### Environment Variables Set via `azd env set`:
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `AZURE_VOICELIVE_ENDPOINT` | Yes | Your VoiceLive API endpoint |
-| `AZURE_VOICELIVE_VOICE` | No | TTS voice (default: en-US-Ava:DragonHDLatestNeural) |
-| `ENABLE_LOGGING` | No | File logging (default: false in production) |
+Only `AZURE_VOICELIVE_ENDPOINT` is required. All others fall back to the
+defaults baked into [infra/main.parameters.json](infra/main.parameters.json).
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `AZURE_VOICELIVE_ENDPOINT` | Yes | - | Your VoiceLive API endpoint |
+| `AZURE_VOICELIVE_MODEL` | No | `gpt-realtime` | Realtime model deployment name |
+| `AZURE_VOICELIVE_VOICE` | No | `en-US-AvaMultilingualNeural` | TTS voice |
+| `ENABLE_LOGGING` | No | `false` | File logging |
+| `ENABLE_INPUT_TRANSCRIPTION` | No | `true` | "Spoken" bubble in the UI |
+| `VOICELIVE_TRANSCRIPTION_MODEL` | No | `gpt-4o-transcribe` | Transcription model |
+| `VOICELIVE_TRANSCRIPTION_LANGUAGE` | No | `en-US` | Transcription language hint |
+| `VOICELIVE_VAD_THRESHOLD` | No | `0.8` | VAD threshold |
+| `VOICELIVE_VAD_PREFIX_PADDING_MS` | No | `300` | VAD prefix padding (ms) |
+| `VOICELIVE_VAD_SILENCE_MS` | No | `1000` | Silence required to end turn (ms) |
+| `VOICELIVE_ECHO_CANCELLATION` | No | `true` | Echo cancellation |
+| `VOICELIVE_NOISE_REDUCTION` | No | `true` | Noise reduction |
+| `VOICELIVE_NOISE_REDUCTION_TYPE` | No | `azure_deep_noise_suppression` | Noise reduction algorithm |
+
+See [.env.example](.env.example) for full descriptions.
 
 ### Managed in Bicep (automatic):
 
-- `AZURE_VOICELIVE_INSTRUCTIONS_FILE` - Points to system_instructions.txt
+- `AZURE_VOICELIVE_INSTRUCTIONS_FILE` - Points to `system_instructions.txt`
+- `SERVER_MODE=true`
 - Port 8000 exposure
 - WebSocket configuration
 - Auto-scaling rules

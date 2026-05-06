@@ -11,11 +11,41 @@
     "azureVoiceliveEndpoint": {
       "value": "${AZURE_VOICELIVE_ENDPOINT}"
     },
+    "azureVoiceliveModel": {
+      "value": "${AZURE_VOICELIVE_MODEL=gpt-realtime}"
+    },
     "azureVoiceliveVoice": {
-      "value": "${AZURE_VOICELIVE_VOICE=en-US-Ava:DragonHDLatestNeural}"
+      "value": "${AZURE_VOICELIVE_VOICE=en-US-AvaMultilingualNeural}"
     },
     "enableLogging": {
       "value": "${ENABLE_LOGGING=false}"
+    },
+    "enableInputTranscription": {
+      "value": "${ENABLE_INPUT_TRANSCRIPTION=true}"
+    },
+    "voiceliveTranscriptionModel": {
+      "value": "${VOICELIVE_TRANSCRIPTION_MODEL=gpt-4o-transcribe}"
+    },
+    "voiceliveTranscriptionLanguage": {
+      "value": "${VOICELIVE_TRANSCRIPTION_LANGUAGE=en-US}"
+    },
+    "voiceliveVadThreshold": {
+      "value": "${VOICELIVE_VAD_THRESHOLD=0.8}"
+    },
+    "voiceliveVadPrefixPaddingMs": {
+      "value": "${VOICELIVE_VAD_PREFIX_PADDING_MS=300}"
+    },
+    "voiceliveVadSilenceMs": {
+      "value": "${VOICELIVE_VAD_SILENCE_MS=1000}"
+    },
+    "voiceliveEchoCancellation": {
+      "value": "${VOICELIVE_ECHO_CANCELLATION=true}"
+    },
+    "voiceliveNoiseReduction": {
+      "value": "${VOICELIVE_NOISE_REDUCTION=true}"
+    },
+    "voiceliveNoiseReductionType": {
+      "value": "${VOICELIVE_NOISE_REDUCTION_TYPE=azure_deep_noise_suppression}"
     },
     "cognitiveServicesResourceId": {
       "value": "${AZURE_COGNITIVE_SERVICES_RESOURCE_ID=}"

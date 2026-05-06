@@ -54,14 +54,22 @@ Go to your GitHub repository → Settings → Secrets and variables → Actions
 | `AZURE_CREDENTIALS` | Full JSON from service principal | Step 1 output |
 | `AZURE_VOICELIVE_ENDPOINT` | Your VoiceLive endpoint | From `.env` |
 
-**Add these variables:**
+**Add these variables (all optional except `AZURE_ENV_NAME` / `AZURE_LOCATION` / `AZURE_SUBSCRIPTION_ID`):**
 
-| Variable Name | Value | Example |
-|---------------|-------|---------|
+| Variable Name | Value | Example / Default |
+|---------------|-------|-------------------|
 | `AZURE_ENV_NAME` | Your environment name | `voice-translation-prod` |
 | `AZURE_LOCATION` | Azure region | `eastus` |
 | `AZURE_SUBSCRIPTION_ID` | Your subscription ID | From `az account show` |
-| `AZURE_VOICELIVE_VOICE` | TTS voice (optional) | `en-US-Ava:DragonHDLatestNeural` |
+| `AZURE_VOICELIVE_MODEL` | Realtime model | `gpt-realtime` |
+| `AZURE_VOICELIVE_VOICE` | TTS voice | `en-US-AvaMultilingualNeural` |
+| `ENABLE_INPUT_TRANSCRIPTION` | "Spoken" bubble | `true` |
+| `VOICELIVE_TRANSCRIPTION_MODEL` | Transcription model | `gpt-4o-transcribe` |
+| `VOICELIVE_TRANSCRIPTION_LANGUAGE` | Language hint | `en-US` |
+| `VOICELIVE_VAD_THRESHOLD` | VAD threshold | `0.8` |
+| `VOICELIVE_VAD_SILENCE_MS` | End-of-turn silence (ms) | `1000` |
+
+Any variable omitted falls back to the default in [infra/main.parameters.json](../infra/main.parameters.json).
 
 #### Step 3: Enable Workflow
 

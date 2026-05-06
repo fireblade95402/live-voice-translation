@@ -328,9 +328,7 @@ function addMessage(role, text) {
   const tag = document.createElement("div");
   tag.className = "message-tag";
   const roleLabel = role === "user" ? "\uD83C\uDFA4 Spoken" : "\uD83C\uDF10 Translated";
-  const langName = role === "user" ? (languages.lang1 || "") : (languages.lang2 || "");
-  const langChipHtml = langName ? `<span class="lang-chip">${langName}</span>` : "";
-  tag.innerHTML = `<span>${roleLabel}</span>${langChipHtml}`;
+  tag.innerHTML = `<span>${roleLabel}</span>`;
 
   const bubble = document.createElement("div");
   bubble.className = `bubble ${role}`;

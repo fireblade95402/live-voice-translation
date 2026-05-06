@@ -62,13 +62,12 @@ az account show
 # Copy the example configuration
 cp .env.example .env
 
-# Edit .env with your actual Azure credentials
-# Required fields to fill in:
+# Edit .env with your actual Azure credentials.
+# The only required field is:
 # - AZURE_VOICELIVE_ENDPOINT
-# - AZURE_SUBSCRIPTION_ID
-# - AZURE_VOICELIVE_PROJECT_NAME
-# - AZURE_LOCATION
-# - AZURE_ENV_NAME
+#
+# All other variables (model, voice, transcription, VAD, logging) have
+# sensible defaults documented in .env.example.
 
 nano .env  # or use your preferred editor
 ```
@@ -154,30 +153,71 @@ The quick start covers basic setup. Here's more detail:
 
 ## Configuration
 
-Copy and update the `.env` file with your Azure credentials:
+Copy `.env.example` to `.env` and fill in your Azure credentials:
+
+```bash
+cp .env.example .env
+```
+
+A minimal `.env` looks like:
 
 ```bash
 # Azure VoiceLive API (REQUIRED)
-AZURE_VOICELIVE_ENDPOINT="your-endpoint-url"
+AZURE_VOICELIVE_ENDPOINT="https://your-resource.services.ai.azure.com/"
+AZURE_VOICELIVE_MODEL="gpt-realtime"
 
-# TTS Voice (Optional, defaults to en-US-Ava:DragonHDLatestNeural)
-AZURE_VOICELIVE_VOICE="en-US-Ava:DragonHDLatestNeural"
+# TTS voice (recommended for translation: a multilingual voice)
+AZURE_VOICELIVE_VOICE="en-US-AvaMultilingualNeural"
 
-# Instructions file (Optional, defaults to system_instructions.txt)
+# Instructions file (version controlled)
 AZURE_VOICELIVE_INSTRUCTIONS_FILE="system_instructions.txt"
 
-# Logging (Optional, defaults to true)
+# Logging
 ENABLE_LOGGING=true
 ```
 
+See [.env.example](.env.example) for the complete list with comments.
+
 ### Environment Variables
+
+#### Azure VoiceLive
 
 | Variable | Description | Required | Default |
 |----------|-------------|----------|---------|
-| `AZURE_VOICELIVE_ENDPOINT` | Azure VoiceLive API endpoint URL | Yes | N/A |
-| `AZURE_VOICELIVE_VOICE` | TTS voice for response audio | No | `en-US-Ava:DragonHDLatestNeural` |
+| `AZURE_VOICELIVE_ENDPOINT` | Azure VoiceLive / Foundry endpoint URL | Yes | N/A |
+| `AZURE_VOICELIVE_MODEL` | Realtime model deployment name | No | `gpt-realtime` |
+| `AZURE_VOICELIVE_VOICE` | TTS voice for response audio | No | `en-US-AvaMultilingualNeural` |
 | `AZURE_VOICELIVE_INSTRUCTIONS_FILE` | Path to system instructions file | No | `system_instructions.txt` |
-| `ENABLE_LOGGING` | Enable/disable log file generation (true/false) | No | `true` |
+
+#### Logging
+
+| Variable | Description | Required | Default |
+|----------|-------------|----------|---------|
+| `ENABLE_LOGGING` | Write timestamped `.log` files to `./logs/` (true/false) | No | `true` |
+
+#### Input transcription (the "Spoken" bubble)
+
+| Variable | Description | Required | Default |
+|----------|-------------|----------|---------|
+| `ENABLE_INPUT_TRANSCRIPTION` | Master switch for user-input transcription. When false, no "Spoken" bubble appears. | No | `true` |
+| `VOICELIVE_TRANSCRIPTION_MODEL` | One of `azure-speech`, `gpt-4o-transcribe`, `gpt-4o-mini-transcribe`, `whisper-1` | No | `gpt-4o-transcribe` |
+| `VOICELIVE_TRANSCRIPTION_LANGUAGE` | BCP-47 (`azure-speech`, comma-separated lists OK, e.g. `en-US,fr-FR`) or ISO-639-1 (`gpt-4o-*` / `whisper-1`, single code only). Blank = auto-detect. | No | `en-US` |
+
+Notes:
+- `azure-speech` is best for bilingual sessions because it accepts multiple BCP-47 locales and auto-detects per utterance. Requires Speech to be enabled on the Foundry resource.
+- Once MODE A confirms the language pair, the language hint is overridden mid-session automatically (azure-speech only).
+- `gpt-4o-mini-transcribe` is fast/cheap but may hallucinate proper nouns.
+
+#### Voice Activity Detection (VAD) and audio enhancement
+
+| Variable | Description | Required | Default |
+|----------|-------------|----------|---------|
+| `VOICELIVE_VAD_THRESHOLD` | 0.0-1.0. Higher = stricter, ignores background speech. | No | `0.8` |
+| `VOICELIVE_VAD_PREFIX_PADDING_MS` | Padding (ms) added before detected speech. | No | `300` |
+| `VOICELIVE_VAD_SILENCE_MS` | Silence (ms) required to end a turn. Raise for long sentences with natural pauses. | No | `1000` |
+| `VOICELIVE_ECHO_CANCELLATION` | Acoustic echo cancellation (true/false). | No | `true` |
+| `VOICELIVE_NOISE_REDUCTION` | Noise reduction (true/false). | No | `true` |
+| `VOICELIVE_NOISE_REDUCTION_TYPE` | Noise reduction algorithm. | No | `azure_deep_noise_suppression` |
 
 ### Getting Your AZURE_VOICELIVE_ENDPOINT
 
@@ -188,6 +228,7 @@ ENABLE_LOGGING=true
 
 ### Supported Voices
 
+- `en-US-AvaMultilingualNeural` (recommended for translation)
 - `en-US-Ava:DragonHDLatestNeural`
 - `en-US-Guy:DragonHDLatestNeural`
 - Or specify OpenAI voices: `alloy`, `echo`, `fable`, `onyx`, `nova`, `shimmer`

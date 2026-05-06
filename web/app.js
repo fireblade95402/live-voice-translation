@@ -1,5 +1,6 @@
 const newConversationButton = document.getElementById("newConversation");
 const pauseConversationButton = document.getElementById("pauseConversation");
+const muteMicButton = document.getElementById("muteMic");
 const statusEl = document.getElementById("status");
 const chatEl = document.getElementById("chat");
 const languageDisplayEl = document.getElementById("languageDisplay");
@@ -8,6 +9,7 @@ const language2El = document.getElementById("language2");
 
 let conversationActive = false;
 let conversationPaused = false;
+let micMuted = false;
 let socket;
 let currentUserMessage = null;
 let currentAssistantMessage = null;
@@ -235,7 +237,11 @@ async function startMicrophoneCapture() {
       if (conversationPaused) {
         return; // Don't send if paused
       }
-      
+
+      if (micMuted) {
+        return; // Don't send if muted
+      }
+
       if (!socket) {
         console.warn("No socket available");
         return;
@@ -315,17 +321,27 @@ function extractLanguages(text) {
 function addMessage(role, text) {
   const messageDiv = document.createElement("div");
   messageDiv.className = `message ${role}`;
-  
+
+  const column = document.createElement("div");
+  column.className = "message-column";
+
+  const tag = document.createElement("div");
+  tag.className = "message-tag";
+  const roleLabel = role === "user" ? "\uD83C\uDFA4 Spoken" : "\uD83C\uDF10 Translated";
+  tag.innerHTML = `<span>${roleLabel}</span>`;
+
   const bubble = document.createElement("div");
   bubble.className = `bubble ${role}`;
   bubble.textContent = text;
-  
-  messageDiv.appendChild(bubble);
+
+  column.appendChild(tag);
+  column.appendChild(bubble);
+  messageDiv.appendChild(column);
   chatEl.appendChild(messageDiv);
-  
+
   // Scroll to bottom to show the latest message (iOS Safari compatible)
   scrollToBottom();
-  
+
   return bubble;
 }
 
@@ -352,11 +368,18 @@ function updateControls() {
   if (!conversationActive) {
     pauseConversationButton.disabled = true;
     pauseConversationButton.textContent = "Pause";
+    muteMicButton.disabled = true;
+    muteMicButton.textContent = "Mute Mic";
+    muteMicButton.setAttribute("aria-pressed", "false");
+    micMuted = false;
     return;
   }
 
   pauseConversationButton.disabled = false;
   pauseConversationButton.textContent = conversationPaused ? "Resume" : "Pause";
+  muteMicButton.disabled = conversationPaused;
+  muteMicButton.textContent = micMuted ? "Unmute Mic" : "Mute Mic";
+  muteMicButton.setAttribute("aria-pressed", micMuted ? "true" : "false");
 }
 
 function startConversation({ clear = true, initialText, statusMessage } = {}) {
@@ -439,6 +462,15 @@ pauseConversationButton.addEventListener("click", () => {
   }
 });
 
+muteMicButton.addEventListener("click", () => {
+  if (!conversationActive || conversationPaused) {
+    return;
+  }
+  micMuted = !micMuted;
+  setStatus(micMuted ? "Mic muted" : "Listening for speech...");
+  updateControls();
+});
+
 function appendText(el, text) {
   el.textContent += text;
   el.scrollTop = el.scrollHeight;
@@ -494,6 +526,14 @@ function connectWebSocket() {
         appendToMessage(currentUserMessage, data.text || "");
         break;
       case "transcript_done":
+        // Some transcription models only emit the final text (no deltas).
+        // Make sure the user bubble appears with the final transcript.
+        if (!currentUserMessage && data.text) {
+          currentUserMessage = addMessage("user", data.text);
+        } else if (currentUserMessage && data.text && !currentUserMessage.textContent) {
+          currentUserMessage.textContent = data.text;
+          scrollToBottom();
+        }
         currentUserMessage = null;
         break;
       case "assistant_delta":

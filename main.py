@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 import os
+import re
 import sys
 import argparse
 import asyncio
@@ -354,6 +355,15 @@ class BasicVoiceAssistant:
         self._detected_language: Optional[str] = None
         self._initial_text = initial_text
         self._initial_text_sent = False
+        # Current transcription model/language. Starts from env defaults; can be
+        # updated mid-session once the assistant confirms the language pair.
+        self._transcription_model: str = os.environ.get(
+            "VOICELIVE_TRANSCRIPTION_MODEL", "gpt-4o-transcribe"
+        )
+        self._transcription_language: Optional[str] = (
+            os.environ.get("VOICELIVE_TRANSCRIPTION_LANGUAGE") or None
+        )
+        self._languages_locked = False
 
     async def _emit(self, event_type: str, payload: dict) -> None:
         if not self._event_callback:
@@ -463,20 +473,17 @@ class BasicVoiceAssistant:
         )
 
         # Transcribe the user's spoken input so the UI can show the original text
-        # alongside the translated assistant response. Leave `language` unset by
-        # default so the service auto-detects; the supported languages list only
-        # accepts a single ISO-639-1 code (not a comma-separated list), so set
-        # VOICELIVE_TRANSCRIPTION_LANGUAGE to one of: af, ar, az, be, bg, bs,
-        # ca, cs, cy, da, de, el, en, es, et, fa, fi, fr, gl, he, hi, hr, hu,
-        # hy, id, is, it, ja, kk, kn, ko, lt, lv, mi, mk, mr, ms, ne, nl, no,
-        # pl, pt, ro, ru, sk, sl, sr, sv, sw, ta, th, tl, tr, uk, ur, vi, zh.
-        transcription_model = os.environ.get(
-            "VOICELIVE_TRANSCRIPTION_MODEL", "gpt-4o-transcribe"
-        )
-        transcription_language = os.environ.get("VOICELIVE_TRANSCRIPTION_LANGUAGE") or None
+        # alongside the translated assistant response. Language handling depends
+        # on the transcription model:
+        #   - gpt-4o-transcribe / gpt-4o-mini-transcribe / whisper-1: single
+        #     ISO-639-1 code (e.g. 'en'). Leave unset for auto-detect.
+        #   - azure-speech: BCP-47 locale (e.g. 'en-US'), or a comma-separated
+        #     list for multi-language auto-detection (e.g. 'en-US,fr-FR').
+        # Once MODE A confirms the language pair, _update_transcription_languages
+        # rewrites this config mid-session.
         input_transcription = AudioInputTranscriptionOptions(
-            model=transcription_model,
-            language=transcription_language,
+            model=self._transcription_model,
+            language=self._transcription_language,
         )
 
         # Create session configuration
@@ -497,6 +504,103 @@ class BasicVoiceAssistant:
         await conn.session.update(session=session_config)
 
         logger.info("Session configuration sent")
+
+    # BCP-47 / ISO-639-1 codes for languages we support locking onto. Add more
+    # as needed. Order matters only for fallback ISO-639-1 lookups.
+    _LANGUAGE_TO_LOCALES = {
+        "english": ("en-US", "en"),
+        "spanish": ("es-ES", "es"),
+        "french": ("fr-FR", "fr"),
+        "german": ("de-DE", "de"),
+        "italian": ("it-IT", "it"),
+        "portuguese": ("pt-PT", "pt"),
+        "brazilian portuguese": ("pt-BR", "pt"),
+        "dutch": ("nl-NL", "nl"),
+        "russian": ("ru-RU", "ru"),
+        "arabic": ("ar-SA", "ar"),
+        "hindi": ("hi-IN", "hi"),
+        "japanese": ("ja-JP", "ja"),
+        "korean": ("ko-KR", "ko"),
+        "chinese": ("zh-CN", "zh"),
+        "mandarin": ("zh-CN", "zh"),
+        "cantonese": ("zh-HK", "zh"),
+        "polish": ("pl-PL", "pl"),
+        "turkish": ("tr-TR", "tr"),
+        "swedish": ("sv-SE", "sv"),
+        "norwegian": ("nb-NO", "no"),
+        "danish": ("da-DK", "da"),
+        "finnish": ("fi-FI", "fi"),
+        "greek": ("el-GR", "el"),
+        "hebrew": ("he-IL", "he"),
+        "thai": ("th-TH", "th"),
+        "vietnamese": ("vi-VN", "vi"),
+        "indonesian": ("id-ID", "id"),
+        "czech": ("cs-CZ", "cs"),
+        "romanian": ("ro-RO", "ro"),
+        "ukrainian": ("uk-UA", "uk"),
+    }
+
+    _CONFIRMATION_PATTERN = re.compile(
+        r"translate between\s+([A-Za-z][A-Za-z\s]*?)\s+and\s+([A-Za-z][A-Za-z\s]*?)\s*[\.!]",
+        re.IGNORECASE,
+    )
+
+    def _resolve_language_codes(self, name1: str, name2: str) -> Optional[str]:
+        """Map two spoken language names to a transcription `language` value.
+
+        For `azure-speech` we return BCP-47 locales joined by comma so the
+        service auto-detects between them. For other models (which only accept
+        a single ISO-639-1 code) we return just the first language's code.
+        Returns None if either language can't be resolved.
+        """
+        entry1 = self._LANGUAGE_TO_LOCALES.get(name1.strip().lower())
+        entry2 = self._LANGUAGE_TO_LOCALES.get(name2.strip().lower())
+        if not entry1 or not entry2:
+            return None
+
+        if self._transcription_model == "azure-speech":
+            return f"{entry1[0]},{entry2[0]}"
+        # Non-azure models: single ISO-639-1 code only. Pin to language 1.
+        return entry1[1]
+
+    async def _update_transcription_languages(self, lang_value: str) -> None:
+        """Re-issue session.update with a new input_audio_transcription config."""
+        conn = self.connection
+        if conn is None:
+            return
+        try:
+            new_transcription = AudioInputTranscriptionOptions(
+                model=self._transcription_model,
+                language=lang_value,
+            )
+            session_config = RequestSession(input_audio_transcription=new_transcription)
+            await conn.session.update(session=session_config)
+            self._transcription_language = lang_value
+            self._languages_locked = True
+            logger.info(
+                "Updated transcription language to %r (model=%s)",
+                lang_value,
+                self._transcription_model,
+            )
+        except Exception:
+            logger.exception("Failed to update transcription language")
+
+    async def _maybe_lock_languages_from_assistant(self, text: str) -> None:
+        """Detect the MODE A confirmation phrase and reconfigure transcription."""
+        if self._languages_locked or not text:
+            return
+        match = self._CONFIRMATION_PATTERN.search(text)
+        if not match:
+            return
+        lang_value = self._resolve_language_codes(match.group(1), match.group(2))
+        if not lang_value:
+            logger.info(
+                "Confirmation matched but languages unrecognized: %r / %r",
+                match.group(1),
+                match.group(2),
+            )
+            return
+        await self._update_transcription_languages(lang_value)
 
     async def _send_text_message(self, text: str) -> None:
         conn = self.connection
@@ -629,6 +733,7 @@ class BasicVoiceAssistant:
             text = getattr(event, "text", None) or self._assistant_transcript
             if text:
                 await self._emit("assistant_done", {"text": text})
+                await self._maybe_lock_languages_from_assistant(text)
             self._assistant_transcript = ""
 
         elif event.type == ServerEventType.RESPONSE_AUDIO_TRANSCRIPT_DELTA:
@@ -641,6 +746,7 @@ class BasicVoiceAssistant:
             text = getattr(event, "text", None) or self._assistant_transcript
             if text:
                 await self._emit("assistant_done", {"text": text})
+                await self._maybe_lock_languages_from_assistant(text)
             self._assistant_transcript = ""
 
         else:

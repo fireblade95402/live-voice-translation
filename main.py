@@ -363,6 +363,14 @@ class BasicVoiceAssistant:
         self._transcription_language: Optional[str] = (
             os.environ.get("VOICELIVE_TRANSCRIPTION_LANGUAGE") or None
         )
+        self._transcription_enabled: bool = os.environ.get(
+            "ENABLE_INPUT_TRANSCRIPTION", "true"
+        ).strip().lower() not in ("false", "0", "no", "off")
+        if not self._transcription_enabled:
+            logger.info(
+                "Input transcription disabled via ENABLE_INPUT_TRANSCRIPTION; "
+                "the 'Spoken' bubble will not be shown."
+            )
         self._languages_locked = False
 
     async def _emit(self, event_type: str, payload: dict) -> None:
@@ -481,9 +489,13 @@ class BasicVoiceAssistant:
         #     list for multi-language auto-detection (e.g. 'en-US,fr-FR').
         # Once MODE A confirms the language pair, _update_transcription_languages
         # rewrites this config mid-session.
-        input_transcription = AudioInputTranscriptionOptions(
-            model=self._transcription_model,
-            language=self._transcription_language,
+        input_transcription = (
+            AudioInputTranscriptionOptions(
+                model=self._transcription_model,
+                language=self._transcription_language,
+            )
+            if self._transcription_enabled
+            else None
         )
 
         # Create session configuration
@@ -567,6 +579,10 @@ class BasicVoiceAssistant:
         """Re-issue session.update with a new input_audio_transcription config."""
         conn = self.connection
         if conn is None:
+            return
+        if not self._transcription_enabled:
+            # Transcription is disabled globally; nothing to update.
+            self._languages_locked = True
             return
         try:
             new_transcription = AudioInputTranscriptionOptions(

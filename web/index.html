@@ -25,6 +25,53 @@
           <button id="pauseConversation" class="secondary" disabled>Pause</button>
           <button id="muteMic" class="secondary" disabled aria-pressed="false">Mute Mic</button>
         </div>
+        <div class="mode-row">
+          <label for="modeSelect">Mode:</label>
+          <select id="modeSelect">
+            <option value="voicelive">Turn-based (VoiceLive)</option>
+            <option value="simultaneous">Simultaneous (live captions + audio)</option>
+          </select>
+          <span id="languagePicker" class="language-picker" hidden>
+            <label for="localeA">From/To</label>
+            <select id="localeA">
+              <option value="en-US">English (US)</option>
+              <option value="en-GB">English (UK)</option>
+              <option value="es-ES">Spanish (Spain)</option>
+              <option value="es-MX">Spanish (Mexico)</option>
+              <option value="fr-FR">French</option>
+              <option value="de-DE">German</option>
+              <option value="it-IT">Italian</option>
+              <option value="pt-PT">Portuguese</option>
+              <option value="pt-BR">Portuguese (Brazil)</option>
+              <option value="nl-NL">Dutch</option>
+              <option value="ja-JP">Japanese</option>
+              <option value="zh-CN">Chinese (Mandarin)</option>
+              <option value="ko-KR">Korean</option>
+              <option value="ar-EG">Arabic</option>
+              <option value="hi-IN">Hindi</option>
+              <option value="ru-RU">Russian</option>
+            </select>
+            <span class="language-arrow">↔</span>
+            <select id="localeB">
+              <option value="en-US">English (US)</option>
+              <option value="en-GB">English (UK)</option>
+              <option value="es-ES" selected>Spanish (Spain)</option>
+              <option value="es-MX">Spanish (Mexico)</option>
+              <option value="fr-FR">French</option>
+              <option value="de-DE">German</option>
+              <option value="it-IT">Italian</option>
+              <option value="pt-PT">Portuguese</option>
+              <option value="pt-BR">Portuguese (Brazil)</option>
+              <option value="nl-NL">Dutch</option>
+              <option value="ja-JP">Japanese</option>
+              <option value="zh-CN">Chinese (Mandarin)</option>
+              <option value="ko-KR">Korean</option>
+              <option value="ar-EG">Arabic</option>
+              <option value="hi-IN">Hindi</option>
+              <option value="ru-RU">Russian</option>
+            </select>
+          </span>
+        </div>
         <div id="languageDisplay" class="language-display">
           <span class="language-label">Translating between:</span>
           <div class="language-pair">

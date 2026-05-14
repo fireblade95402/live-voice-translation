@@ -15,6 +15,7 @@ from azure.core.credentials_async import AsyncTokenCredential
 from dotenv import load_dotenv
 
 from main import BasicVoiceAssistant, load_instructions
+from simultaneous import SimultaneousInterpreter
 
 # Load environment variables
 load_dotenv("./.env", override=True)
@@ -96,6 +97,9 @@ class AssistantManager:
         self.task: Optional[asyncio.Task] = None
         self._initial_text: Optional[str] = None
         self.voicelive_connection: Optional[object] = None  # Reference to VoiceLive connection
+        self.mode: str = "voicelive"
+        self.simultaneous: Optional[SimultaneousInterpreter] = None
+        self._si_locales: tuple[str, str] = ("en-US", "es-ES")
 
     async def connect(self, websocket: WebSocket) -> None:
         print("Manager.connect() called", flush=True)
@@ -106,17 +110,35 @@ class AssistantManager:
         await self.stop()
         self.websocket = None
 
-    async def start(self, initial_text: Optional[str] = None) -> None:
-        print("Manager.start() called", flush=True)
+    async def start(
+        self,
+        initial_text: Optional[str] = None,
+        mode: str = "voicelive",
+        locale_a: Optional[str] = None,
+        locale_b: Optional[str] = None,
+    ) -> None:
+        print(f"Manager.start() called mode={mode}", flush=True)
         print("Stopping any existing task", flush=True)
         self._initial_text = initial_text
+        self.mode = mode if mode in ("voicelive", "simultaneous") else "voicelive"
+        if locale_a and locale_b:
+            self._si_locales = (locale_a, locale_b)
         await self.stop()
         print("Creating assistant task", flush=True)
-        self.task = asyncio.create_task(self._run_assistant())
+        if self.mode == "simultaneous":
+            self.task = asyncio.create_task(self._run_simultaneous())
+        else:
+            self.task = asyncio.create_task(self._run_assistant())
         print("Task created", flush=True)
 
     async def stop(self) -> None:
         print("Manager.stop() called", flush=True)
+        if self.simultaneous is not None:
+            try:
+                await self.simultaneous.stop()
+            except Exception as exc:
+                print(f"Error stopping simultaneous: {exc}", flush=True)
+            self.simultaneous = None
         if self.task:
             print("Cancelling task", flush=True)
             self.task.cancel()
@@ -125,6 +147,7 @@ class AssistantManager:
             except asyncio.CancelledError:
                 print("Task cancelled successfully", flush=True)
             self.task = None
+        self.voicelive_connection = None
         await self._send("status", {"message": "Idle"})
 
     async def _run_assistant(self) -> None:
@@ -172,6 +195,40 @@ class AssistantManager:
             traceback.print_exc()
             await self._send("error", {"message": str(e)})
 
+    async def _run_simultaneous(self) -> None:
+        try:
+            print("_run_simultaneous started", flush=True)
+            speech_region = os.environ.get("AZURE_SPEECH_REGION")
+            if not speech_region:
+                await self._send(
+                    "error",
+                    {
+                        "message": "AZURE_SPEECH_REGION must be set in .env for simultaneous mode."
+                    },
+                )
+                return
+
+            locale_a, locale_b = self._si_locales
+            interpreter = SimultaneousInterpreter(
+                speech_region=speech_region,
+                locale_a=locale_a,
+                locale_b=locale_b,
+                event_callback=self._send,
+                audio_callback=self._send,
+            )
+            self.simultaneous = interpreter
+            await interpreter.start()
+            print("Simultaneous interpreter finished", flush=True)
+        except asyncio.CancelledError:
+            print("Simultaneous task cancelled", flush=True)
+        except Exception as e:
+            print(f"Error in _run_simultaneous: {e}", flush=True)
+            import traceback
+            traceback.print_exc()
+            await self._send("error", {"message": str(e)})
+        finally:
+            self.simultaneous = None
+
     async def _send(self, event_type: str, payload: dict) -> None:
         if not self.websocket:
             return
@@ -209,7 +266,12 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
             event_type = data.get("type")
             print(f"WebSocket received: {event_type}", flush=True)
             if event_type == "start":
-                await manager.start(initial_text=data.get("text"))
+                await manager.start(
+                    initial_text=data.get("text"),
+                    mode=data.get("mode", "voicelive"),
+                    locale_a=data.get("locale_a"),
+                    locale_b=data.get("locale_b"),
+                )
             elif event_type == "stop":
                 await manager.stop()
             elif event_type == "audio":
@@ -218,11 +280,23 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                 if not audio_data:
                     print("Audio message has no data", flush=True)
                     continue
-                    
+
+                # Route to whichever pipeline is active.
+                if manager.mode == "simultaneous":
+                    if manager.simultaneous is None:
+                        # Not yet started - drop silently.
+                        continue
+                    try:
+                        import base64 as _b64
+                        manager.simultaneous.push_audio(_b64.b64decode(audio_data))
+                    except Exception as e:
+                        print(f"Error pushing audio to interpreter: {e}", flush=True)
+                    continue
+
                 if not manager.voicelive_connection:
                     print("No VoiceLive connection available", flush=True)
                     continue
-                
+
                 try:
                     await manager.voicelive_connection.input_audio_buffer.append(audio=audio_data)
                     # Log every 50th audio chunk to avoid spam

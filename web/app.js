@@ -6,6 +6,10 @@ const chatEl = document.getElementById("chat");
 const languageDisplayEl = document.getElementById("languageDisplay");
 const language1El = document.getElementById("language1");
 const language2El = document.getElementById("language2");
+const modeSelectEl = document.getElementById("modeSelect");
+const languagePickerEl = document.getElementById("languagePicker");
+const localeAEl = document.getElementById("localeA");
+const localeBEl = document.getElementById("localeB");
 
 let conversationActive = false;
 let conversationPaused = false;
@@ -13,6 +17,7 @@ let micMuted = false;
 let socket;
 let currentUserMessage = null;
 let currentAssistantMessage = null;
+let currentSiPartialEl = null;
 let languages = { lang1: null, lang2: null };
 let audioContext = null;
 let audioWorklet = null;
@@ -21,9 +26,18 @@ let audioProcessor = null;
 let audioQueue = [];
 let isPlayingAudio = false;
 let nextPlayTime = 0;
+let currentMode = "voicelive";
 
 function setStatus(message) {
   statusEl.textContent = message;
+}
+
+if (modeSelectEl) {
+  modeSelectEl.addEventListener("change", () => {
+    languagePickerEl.hidden = modeSelectEl.value !== "simultaneous";
+  });
+  // Initial visibility
+  languagePickerEl.hidden = modeSelectEl.value !== "simultaneous";
 }
 
 // Map common language names to representative country codes (fallbacks)
@@ -364,6 +378,89 @@ function scrollToBottom() {
   });
 }
 
+const localeNameMap = {
+  "en-US": "English", "en-GB": "English",
+  "es-ES": "Spanish", "es-MX": "Spanish",
+  "fr-FR": "French",
+  "de-DE": "German",
+  "it-IT": "Italian",
+  "pt-PT": "Portuguese", "pt-BR": "Portuguese",
+  "nl-NL": "Dutch",
+  "ja-JP": "Japanese",
+  "zh-CN": "Chinese",
+  "ko-KR": "Korean",
+  "ar-EG": "Arabic",
+  "hi-IN": "Hindi",
+  "ru-RU": "Russian",
+};
+
+function localeToName(locale) {
+  if (!locale) return "";
+  return localeNameMap[locale] || locale;
+}
+
+// Render a "live caption" pair (source + translation) that updates in place
+// every time a new si_partial event arrives. We use a single DOM row that is
+// replaced when the recognition finalises (si_final).
+function ensureSiPartialRow() {
+  if (currentSiPartialEl) return currentSiPartialEl;
+
+  const wrap = document.createElement("div");
+  wrap.className = "message si-partial";
+
+  const column = document.createElement("div");
+  column.className = "message-column";
+
+  const tag = document.createElement("div");
+  tag.className = "message-tag";
+  tag.innerHTML = "<span>\uD83C\uDFA7 Live</span>";
+
+  const sourceBubble = document.createElement("div");
+  sourceBubble.className = "bubble user partial";
+  sourceBubble.dataset.role = "source";
+
+  const translatedBubble = document.createElement("div");
+  translatedBubble.className = "bubble assistant partial";
+  translatedBubble.dataset.role = "translated";
+
+  column.appendChild(tag);
+  column.appendChild(sourceBubble);
+  column.appendChild(translatedBubble);
+  wrap.appendChild(column);
+  chatEl.appendChild(wrap);
+  scrollToBottom();
+
+  currentSiPartialEl = { wrap, sourceBubble, translatedBubble };
+  return currentSiPartialEl;
+}
+
+function renderSiPartial(data) {
+  const row = ensureSiPartialRow();
+  row.sourceBubble.textContent = data.source_text || "";
+  row.translatedBubble.textContent = data.translated_text || "";
+  scrollToBottom();
+}
+
+function renderSiFinal(data) {
+  // Drop the live row, then commit two stable bubbles for the final pair.
+  if (currentSiPartialEl) {
+    currentSiPartialEl.wrap.remove();
+    currentSiPartialEl = null;
+  }
+  if (data.source_text) {
+    const bubble = addMessage("user", data.source_text);
+    if (data.source_locale) {
+      bubble.title = data.source_locale;
+    }
+  }
+  if (data.translated_text) {
+    const bubble = addMessage("assistant", data.translated_text);
+    if (data.target_locale) {
+      bubble.title = data.target_locale;
+    }
+  }
+}
+
 function updateControls() {
   if (!conversationActive) {
     pauseConversationButton.disabled = true;
@@ -399,7 +496,14 @@ function startConversation({ clear = true, initialText, statusMessage } = {}) {
   // Start microphone capture
   startMicrophoneCapture();
 
-  const payload = { type: "start" };
+  currentMode = modeSelectEl ? modeSelectEl.value : "voicelive";
+  const payload = { type: "start", mode: currentMode };
+  if (currentMode === "simultaneous") {
+    payload.locale_a = localeAEl ? localeAEl.value : "en-US";
+    payload.locale_b = localeBEl ? localeBEl.value : "es-ES";
+    // Show the language pair badge immediately for simultaneous mode.
+    showLanguages(localeToName(payload.locale_a), localeToName(payload.locale_b));
+  }
   if (typeof initialText === "string") {
     payload.text = initialText;
   }
@@ -414,6 +518,12 @@ function stopConversation({ setIdle = true } = {}) {
   audioQueue = [];
   isPlayingAudio = false;
   nextPlayTime = 0;
+
+  // Drop any in-flight live caption row (simultaneous mode).
+  if (currentSiPartialEl) {
+    currentSiPartialEl.wrap.remove();
+    currentSiPartialEl = null;
+  }
   
   if (setIdle) {
     conversationActive = false;
@@ -559,6 +669,15 @@ function connectWebSocket() {
           }
         }
         currentAssistantMessage = null;
+        break;
+      case "si_languages":
+        showLanguages(localeToName(data.locale_a), localeToName(data.locale_b));
+        break;
+      case "si_partial":
+        renderSiPartial(data);
+        break;
+      case "si_final":
+        renderSiFinal(data);
         break;
       case "error":
         setStatus("Error: " + (data.message || "Unknown error"));

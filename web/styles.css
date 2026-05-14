@@ -325,3 +325,34 @@ h1 {
     font-size: 1.6rem;
   }
 }
+
+
+/* Mode + language picker row */
+.mode-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin: 8px 0;
+  font-size: 14px;
+  color: var(--muted);
+}
+.mode-row select {
+  background: var(--card);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+}
+.language-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Live (partial) caption styling for simultaneous mode */
+.message.si-partial .bubble.partial {
+  opacity: 0.75;
+  font-style: italic;
+  border: 1px dashed var(--border);
+}

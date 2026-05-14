@@ -8,3 +8,4 @@ uvicorn[standard]
 langdetect
 aiohttp
 websockets
+azure-cognitiveservices-speech

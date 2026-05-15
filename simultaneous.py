@@ -259,25 +259,42 @@ class SimultaneousInterpreter:
     # ---- helpers ----------------------------------------------------------
 
     def _detected_locale(self, result) -> Optional[str]:
+        """Return the configured locale (e.g. fr-FR) that best matches the SDK's
+        auto-detect result.
+
+        The SDK may return a full BCP-47 tag (``fr-FR``), a bare ISO-639-1 code
+        (``fr``), or an empty string.  We resolve whichever form is returned back
+        to one of our two configured locales by comparing language-code prefixes
+        so that ``fr``, ``fr-FR``, and ``fr-CA`` all map correctly to the
+        configured locale that starts with ``fr``.
+        """
         try:
-            detected = (
+            raw = (
                 result.properties.get(
                     speechsdk.PropertyId.SpeechServiceConnection_AutoDetectSourceLanguageResult
                 )
                 or ""
-            )
-            return detected or None
+            ).strip()
+            if not raw:
+                return None
+            raw_lang = raw.split("-")[0].lower()
+            for locale in (self._locale_a, self._locale_b):
+                if locale.split("-")[0].lower() == raw_lang:
+                    return locale
+            return None
         except Exception:
             return None
 
     def _other_locale(self, locale: str) -> str:
-        if locale.lower() == self._locale_a.lower():
+        """Return the locale to translate *into* given the detected source locale."""
+        lang = locale.split("-")[0].lower()
+        if lang == self._locale_a.split("-")[0].lower():
             return self._locale_b
-        if locale.lower() == self._locale_b.lower():
+        if lang == self._locale_b.split("-")[0].lower():
             return self._locale_a
-        # Detected something else (shouldn't happen given auto-detect list);
-        # default to translating to locale_a.
-        return self._locale_a
+        # Unrecognised — default to locale_b so we at least translate *somewhere*.
+        logger.warning("Unrecognised detected locale %r; defaulting to %s", locale, self._locale_b)
+        return self._locale_b
 
     def _schedule(self, coro) -> None:
         """Schedule a coroutine from the SDK callback thread onto our loop."""

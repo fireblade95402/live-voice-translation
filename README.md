@@ -1,578 +1,214 @@
 # Live Voice Translation
 
-A real-time voice translation assistant powered by Azure OpenAI VoiceLive API. Translates conversations between two languages in real-time with low latency.
+Real-time, bidirectional speech-to-speech interpreter built on the
+[Azure Speech SDK](https://learn.microsoft.com/azure/ai-services/speech-service/)
+(`TranslationRecognizer` + neural TTS). Pick a language pair, speak in either
+language, and hear the translation in the other language's voice — both
+directions, continuously, in a single session.
 
-## Features
+## How it works
 
-✨ **Real-time Translation** - Instant audio-to-audio translation between two languages  
-🎙️ **Voice Interface** - Speak naturally, get translated responses immediately  
-🌐 **Multi-language Support** - Supports 10+ languages including Spanish, French, German, Chinese, Japanese, etc.  
-⚙️ **Web Interface** - Web-based UI for easy access  
-🔧 **Configurable** - Customize voice, language pair, and behavior via environment variables  
-📝 **Logging** - Optional file-based or console logging  
+```mermaid
+flowchart LR
+    Mic([🎤 Microphone]) -->|PCM16 24 kHz| Browser
+    Browser -->|WS: audio b64| Server
+    Server -->|push_audio| Interp[LiveInterpreter]
+    Interp -->|PushAudioStream| TR[TranslationRecognizer<br/>Continuous LID<br/>v2 endpoint]
+    TR -->|partial / final<br/>+ detected source| Interp
+    Interp -->|translated text| Synth{Pick voice<br/>for target}
+    Synth -->|lang A text| SA[SpeechSynthesizer A]
+    Synth -->|lang B text| SB[SpeechSynthesizer B]
+    SA -->|PCM16 24 kHz| Interp
+    SB -->|PCM16 24 kHz| Interp
+    Interp -->|WS: audio b64| Browser
+    Interp -.->|WS: partial/final text| Browser
+    Browser -->|Web Audio gapless| Spk([🔊 Speaker])
+
+    Cred[DefaultAzureCredential] -->|AAD token| Interp
+    Speech[(Azure Speech<br/>resource)] -. authorises .- Cred
+    TR --- Speech
+    SA --- Speech
+    SB --- Speech
+```
+
+- One `TranslationRecognizer` configured with both languages and
+  `LanguageIdMode=Continuous` auto-detects the source per utterance via
+  the Speech v2 universal endpoint.
+- Two `SpeechSynthesizer` instances (one per language) render the translation
+  in the appropriate neural voice.
+- Authentication uses `DefaultAzureCredential` (Azure CLI locally, Managed
+  Identity in Azure) — no keys.
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) for sequence and deployment diagrams.
 
 ## Prerequisites
 
-**Local Development:**
-- Python 3.8+
-- Azure OpenAI VoiceLive API access (with valid credentials)
-- Microphone and speakers for audio input/output
-- [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli) for authentication
+- Python 3.10+
+- An Azure **Speech** (or **AI Services / Cognitive Services**) resource
+- Your local identity (and, in production, the container app's managed
+  identity) granted the **Cognitive Services Speech User** role on the
+  Speech resource
+- For the CLI runner only: a working microphone/speaker and PortAudio
+  (`pyaudio`)
+- For Azure deployment: [Azure Developer CLI (azd)](https://learn.microsoft.com/azure/developer/azure-developer-cli/install-azd)
+  and Docker
 
-**Azure Deployment:**
-- [Azure Developer CLI (azd)](https://learn.microsoft.com/azure/developer/azure-developer-cli/install-azd)
-- [Docker Desktop](https://www.docker.com/products/docker-desktop/)
-- Azure subscription with Container Apps access
-
-## Quick Start
-
-### 1. Clone and Set Up
+## Quick start (local)
 
 ```bash
-# Clone the repository
 git clone <repository-url>
 cd live-voice-translation
 
-# Create Python virtual environment (optional but recommended)
 python -m venv venv
+# Windows:  venv\Scripts\activate
+# macOS/Linux:  source venv/bin/activate
 
-# Activate virtual environment
-# On Windows:
-venv\Scripts\activate
-# On macOS/Linux:
-source venv/bin/activate
-
-# Install dependencies
 pip install -r requirements.txt
-```
 
-### 2. Configure Azure
-
-```bash
-# Log in to Azure
+# Sign in so DefaultAzureCredential can mint Speech tokens
 az login
 
-# Verify you have access to your subscription
-az account show
-```
-
-### 3. Set Up Environment Variables
-
-```bash
-# Copy the example configuration
+# Configure the Speech resource
 cp .env.example .env
-
-# Edit .env with your actual Azure credentials.
-# The only required field is:
-# - AZURE_VOICELIVE_ENDPOINT
-#
-# All other variables (model, voice, transcription, VAD, logging) have
-# sensible defaults documented in .env.example.
-
-nano .env  # or use your preferred editor
+# Edit .env and set AZURE_SPEECH_RESOURCE_ID + AZURE_SPEECH_REGION
 ```
 
-See [Configuration](#configuration) section for details on each variable.
-
-### 4. Run the Application
-
-Choose one of the two options below:
-
-#### Option A: Web Interface (Recommended)
+Run the web app:
 
 ```bash
-# Start the FastAPI server
 uvicorn server:app --reload
-
-# Open browser to:
-# http://localhost:8000
+# Open http://localhost:8000
 ```
 
-The web interface provides:
-- Visual start/stop buttons
-- Real-time transcript display
-- Easy language selection
-- Responsive design
-
-#### Option B: Command Line
+Or run the CLI:
 
 ```bash
-# Run the translator directly
-python main.py
-
-# With custom settings:
-python main.py \
-  --voice "en-US-Guy:DragonHDLatestNeural" \
-  --verbose
+python main.py --lang-a en-US --lang-b fr-FR
 ```
 
-### 5. Use the Translator
+## Using the web UI
 
-1. **Start translation:**
-   - Web: Click "Start"
-   - CLI: Wait for "VOICE ASSISTANT READY"
-
-2. **Specify languages:**
-   - Agent asks: "Which two languages would you like me to translate between?"
-   - You respond: "Spanish and English"
-
-3. **Confirm:**
-   - Agent confirms: "I will translate between Spanish and English. You may now begin."
-
-4. **Start translating:**
-   - Speak in one language
-   - Get instant translation in the other
-
-5. **Stop:**
-   - Web: Click "Stop"
-   - CLI: Press `Ctrl+C`
-
-## Installation Details
-
-### Full Step-by-Step Guide
-
-The quick start covers basic setup. Here's more detail:
-
-1. **Clone the repository:**
-   ```bash
-   git clone <repository-url>
-   cd live-voice-translation
-   ```
-
-2. **Install dependencies:**
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-3. **Set up Azure credentials:**
-   ```bash
-   az login
-   ```
-
-4. **Configure environment variables** (see [Configuration](#configuration) section)
+1. Pick **Language A** and **Language B** in the dropdowns.
+2. Click **Start** and allow microphone access.
+3. Speak in either language — the chat shows the live transcript and the
+   translation, and the translated audio plays automatically in the other
+   language's voice.
+4. **Pause** / **Resume** / **Mute Mic** to control capture mid-session.
 
 ## Configuration
 
-Copy `.env.example` to `.env` and fill in your Azure credentials:
+All configuration lives in `.env` (see [.env.example](.env.example)).
 
-```bash
-cp .env.example .env
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `AZURE_SPEECH_RESOURCE_ID` | yes | Full ARM resource ID of the Speech / AI Services resource. |
+| `AZURE_SPEECH_REGION` | yes | Region of that resource (e.g. `swedencentral`, `eastus2`). |
+| `AZURE_SPEECH_DEFAULT_VOICE` | no | Fallback neural voice when no per-locale override is set. Default: `en-US-AvaMultilingualNeural`. |
+| `AZURE_SPEECH_VOICE_<LOCALE>` | no | Per-target-locale voice override. E.g. `AZURE_SPEECH_VOICE_FR_FR=fr-FR-DeniseNeural`. |
+| `INTERPRETER_LANG_A` | no | CLI default for Language A (web UI uses the dropdown). |
+| `INTERPRETER_LANG_B` | no | CLI default for Language B. |
+
+### Supported locales
+
+The UI exposes 15 locales out of the box: `en-US`, `es-ES`, `fr-FR`, `de-DE`,
+`it-IT`, `pt-BR`, `ja-JP`, `ko-KR`, `zh-CN`, `ar-SA`, `ru-RU`, `hi-IN`,
+`nl-NL`, `pl-PL`, `tr-TR`. To add more, extend `LANGUAGE_DEFAULT_VOICES` /
+`LANGUAGE_DISPLAY_NAMES` in [interpreter.py](interpreter.py) and add the
+corresponding `<option>` entries in [web/index.html](web/index.html).
+
+## WebSocket protocol (`/ws`)
+
+Client → server:
+
+```json
+{ "type": "start", "langA": "en-US", "langB": "fr-FR" }
+{ "type": "audio", "data": "<base64 PCM16 24kHz mono>" }
+{ "type": "stop" }
 ```
 
-A minimal `.env` looks like:
+Server → client:
 
-```bash
-# Azure VoiceLive API (REQUIRED)
-AZURE_VOICELIVE_ENDPOINT="https://your-resource.services.ai.azure.com/"
-AZURE_VOICELIVE_MODEL="gpt-realtime"
-
-# TTS voice (recommended for translation: a multilingual voice)
-AZURE_VOICELIVE_VOICE="en-US-AvaMultilingualNeural"
-
-# Instructions file (version controlled)
-AZURE_VOICELIVE_INSTRUCTIONS_FILE="system_instructions.txt"
-
-# Logging
-ENABLE_LOGGING=true
+```json
+{ "type": "status",        "message": "Listening..." }
+{ "type": "language_pair", "lang1": "English", "lang2": "French",
+                           "locale1": "en-US",  "locale2": "fr-FR" }
+{ "type": "partial",       "source": "...", "translation": "...",
+                           "source_locale": "en-US", "target_locale": "fr-FR" }
+{ "type": "final",         "source": "...", "translation": "...",
+                           "source_locale": "en-US", "target_locale": "fr-FR" }
+{ "type": "audio",         "data": "<base64 PCM16 24kHz mono>" }
+{ "type": "error",         "message": "..." }
 ```
 
-See [.env.example](.env.example) for the complete list with comments.
-
-### Environment Variables
-
-#### Azure VoiceLive
-
-| Variable | Description | Required | Default |
-|----------|-------------|----------|---------|
-| `AZURE_VOICELIVE_ENDPOINT` | Azure VoiceLive / Foundry endpoint URL | Yes | N/A |
-| `AZURE_VOICELIVE_MODEL` | Realtime model deployment name | No | `gpt-realtime` |
-| `AZURE_VOICELIVE_VOICE` | TTS voice for response audio | No | `en-US-AvaMultilingualNeural` |
-| `AZURE_VOICELIVE_INSTRUCTIONS_FILE` | Path to system instructions file | No | `system_instructions.txt` |
-
-#### Logging
-
-| Variable | Description | Required | Default |
-|----------|-------------|----------|---------|
-| `ENABLE_LOGGING` | Write timestamped `.log` files to `./logs/` (true/false) | No | `true` |
-
-#### Input transcription (the "Spoken" bubble)
-
-| Variable | Description | Required | Default |
-|----------|-------------|----------|---------|
-| `ENABLE_INPUT_TRANSCRIPTION` | Master switch for user-input transcription. When false, no "Spoken" bubble appears. | No | `true` |
-| `VOICELIVE_TRANSCRIPTION_MODEL` | One of `azure-speech`, `gpt-4o-transcribe`, `gpt-4o-mini-transcribe`, `whisper-1` | No | `gpt-4o-transcribe` |
-| `VOICELIVE_TRANSCRIPTION_LANGUAGE` | BCP-47 (`azure-speech`, comma-separated lists OK, e.g. `en-US,fr-FR`) or ISO-639-1 (`gpt-4o-*` / `whisper-1`, single code only). Blank = auto-detect. | No | `en-US` |
-
-Notes:
-- `azure-speech` is best for bilingual sessions because it accepts multiple BCP-47 locales and auto-detects per utterance. Requires Speech to be enabled on the Foundry resource.
-- Once MODE A confirms the language pair, the language hint is overridden mid-session automatically (azure-speech only).
-- `gpt-4o-mini-transcribe` is fast/cheap but may hallucinate proper nouns.
-
-#### Voice Activity Detection (VAD) and audio enhancement
-
-| Variable | Description | Required | Default |
-|----------|-------------|----------|---------|
-| `VOICELIVE_VAD_THRESHOLD` | 0.0-1.0. Higher = stricter, ignores background speech. | No | `0.8` |
-| `VOICELIVE_VAD_PREFIX_PADDING_MS` | Padding (ms) added before detected speech. | No | `300` |
-| `VOICELIVE_VAD_SILENCE_MS` | Silence (ms) required to end a turn. Raise for long sentences with natural pauses. | No | `1000` |
-| `VOICELIVE_ECHO_CANCELLATION` | Acoustic echo cancellation (true/false). | No | `true` |
-| `VOICELIVE_NOISE_REDUCTION` | Noise reduction (true/false). | No | `true` |
-| `VOICELIVE_NOISE_REDUCTION_TYPE` | Noise reduction algorithm. | No | `azure_deep_noise_suppression` |
-
-### Getting Your AZURE_VOICELIVE_ENDPOINT
-
-1. Go to [Azure Portal](https://portal.azure.com)
-2. Navigate to your AI project resource
-3. In the Overview section, copy the endpoint URL
-4. Example: `https://your-project-name.services.ai.azure.com/`
-
-### Supported Voices
-
-- `en-US-AvaMultilingualNeural` (recommended for translation)
-- `en-US-Ava:DragonHDLatestNeural`
-- `en-US-Guy:DragonHDLatestNeural`
-- Or specify OpenAI voices: `alloy`, `echo`, `fable`, `onyx`, `nova`, `shimmer`
-
-### Supported Languages
-
-- Spanish, French, German, Italian, Portuguese
-- Japanese, Korean, Chinese (Simplified & Traditional)
-- Arabic, Russian, Hindi
-- And more...
-
-## Usage
-
-### Web Interface (Recommended)
-
-1. **Start the server:**
-   ```bash
-   uvicorn server:app --reload
-   ```
-
-2. **Open in browser:**
-   ```
-   http://localhost:8000
-   ```
-
-3. **Use the interface:**
-   - Click "Start" to begin
-   - Specify the two languages you want to translate between
-   - Speak in either language, get translations in the other
-   - Click "Stop" to end session
-
-### Command Line
-
-1. **Run the assistant directly:**
-   ```bash
-   python main.py
-   ```
-
-2. **Specify settings via arguments:**
-   ```bash
-   python main.py \
-     --endpoint "your-endpoint-url" \
-     --model "gpt-realtime" \
-     --voice "en-US-Ava:DragonHDLatestNeural" \
-     --verbose
-   ```
-
-3. **Speak naturally:**
-   - Wait for agent to ask for the two languages
-   - Say the language pair (e.g., "Spanish and English")
-   - Confirm the setup
-   - Start translating!
-
-## How It Works
-
-### Translation Workflow
-
-```
-User speaks in Language A
-    ↓
-Audio captured and sent to Azure VoiceLive
-    ↓
-Speech-to-text conversion
-    ↓
-Translation to Language B (LLM)
-    ↓
-Text-to-speech synthesis
-    ↓
-Audio response played back
-```
-
-### Language Confirmation
-
-The assistant requires explicit confirmation of the language pair upfront:
-
-1. **Agent asks:** "Which two languages would you like me to translate between?"
-2. **User responds:** "Spanish and English"
-3. **Agent confirms:** "I will translate between Spanish and English. You may now begin."
-4. **Translation begins**
-
-This ensures clarity and prevents misunderstandings.
-
-## Project Structure
+## Project layout
 
 ```
 live-voice-translation/
-├── main.py                          # Core translator logic
-├── server.py                        # FastAPI web server
-├── system_instructions.txt          # Agent behavior instructions
-├── requirements.txt                 # Python dependencies
-├── .env                             # Configuration (secrets)
-├── README.md                        # This file
-├── logs/                            # Log files (if enabled)
-├── web/                             # Web frontend
-│   ├── index.html
-│   ├── app.js
-│   └── styles.css
-└── QUICK_GUIDE.md                   # Quick start guide
+├── interpreter.py          # LiveInterpreter — Speech SDK wrapper
+├── server.py               # FastAPI + WebSocket transport
+├── main.py                 # CLI runner (pyaudio)
+├── requirements.txt
+├── .env / .env.example
+├── Dockerfile
+├── azure.yaml              # azd service definition
+├── deploy-azure.{sh,ps1}   # Interactive azd setup helpers
+├── infra/                  # Bicep (Container Apps + role assignment)
+│   ├── main.bicep
+│   ├── main.parameters.json
+│   └── core/...
+└── web/                    # Static frontend (HTML/CSS/JS)
+    ├── index.html
+    ├── app.js
+    └── styles.css
 ```
 
-## Key Files Explained
+## Azure deployment
 
-### `main.py`
-- **AudioProcessor** - Handles audio capture and playback
-- **BasicVoiceAssistant** - Main translation logic
-- Core event handling and session management
-
-### `server.py`
-- FastAPI server with WebSocket support
-- REST endpoint for web interface
-- AssistantManager for lifecycle management
-
-### `system_instructions.txt`
-- System prompt for the AI agent
-- Defines translation behavior and rules
-- Version controlled in git for collaboration
-
-## Logging
-
-### Enabled (default)
-```
-ENABLE_LOGGING=true
-```
-- Creates `logs/` folder
-- Writes to timestamped files: `logs/YYYY-MM-DD_HH-MM-SS_voicelive.log`
-- Includes all debug, info, and error messages
-
-### Disabled
-```
-ENABLE_LOGGING=false
-```
-- No log files created
-- Output to console only
-- Useful for development
-
-### View Logs
-```bash
-# Show latest log
-cat logs/$(ls -t logs | head -1)
-
-# Follow logs in real-time (web server)
-tail -f logs/[timestamp]_voicelive.log
-```
-
-## Troubleshooting
-
-### "AZURE_VOICELIVE_ENDPOINT not set"
-- Verify `.env` file exists
-- Check `AZURE_VOICELIVE_ENDPOINT` is configured
-- Run: `echo $AZURE_VOICELIVE_ENDPOINT` to verify
-
-### "No audio input devices found"
-- Check microphone is connected
-- Run: `python -c "import pyaudio; p = pyaudio.PyAudio(); print([p.get_device_info_by_index(i) for i in range(p.get_device_count())])"`
-- Ensure audio drivers are installed
-
-### "Connection failed"
-- Verify Azure credentials: `az account show`
-- Check endpoint URL is correct
-- Ensure network connectivity to Azure
-
-### "Translations are too verbose"
-- Check `system_instructions.txt` - instructions may need refinement
-- See [INSTRUCTION_IMPROVEMENTS.md](INSTRUCTION_IMPROVEMENTS.md) for tuning guidance
-
-### Server won't start
-- Check port 8000 is available: `netstat -an | grep 8000` (or `netstat -ano | findstr :8000` on Windows)
-- Try different port: `uvicorn server:app --port 8001`
-
-## Development
-
-### Enable Verbose Logging
-```bash
-# Command line
-python main.py --verbose
-
-# Or set env var
-export LOGGING_LEVEL=DEBUG
-```
-
-### Run Tests
-```bash
-# Check code quality
-pylint main.py server.py
-
-# Type checking
-mypy main.py server.py
-```
-
-### Modify Instructions
-1. Edit `system_instructions.txt`
-2. Restart server
-3. Test behavior
-4. Commit changes to git
-
-See [INSTRUCTION_IMPROVEMENTS.md](INSTRUCTION_IMPROVEMENTS.md) for detailed guidance on improving agent behavior.
-
-## Azure Deployment
-
-Deploy to Azure Container Apps with a single command:
+Deploys to Azure Container Apps with managed identity authenticated against
+the existing Speech resource.
 
 ```bash
-# Install Azure Developer CLI
-winget install microsoft.azd
-
-# Login and initialize
+# One-time setup
 azd auth login
-azd init
 
-# Set your VoiceLive endpoint
-azd env set AZURE_VOICELIVE_ENDPOINT "https://your-resource.services.ai.azure.com/"
+# Interactive helper — prompts for the Speech resource ID/region and runs azd up
+./deploy-azure.sh           # macOS/Linux
+.\deploy-azure.ps1          # Windows
+```
 
-# Deploy to Azure
+Or manually:
+
+```bash
+azd env set AZURE_SPEECH_RESOURCE_ID "/subscriptions/.../accounts/<name>"
+azd env set AZURE_SPEECH_REGION "swedencentral"
 azd up
 ```
 
-**What gets deployed:**
-- Azure Container Registry (for Docker images)
-- Azure Container Apps Environment (managed platform)
-- Container App (your application)
-- Log Analytics workspace (monitoring)
-- Managed Identity (secure authentication)
+The Bicep templates provision:
 
-**Cost:** ~$5-10/month for development, scales automatically based on usage
+- Azure Container Registry
+- Container Apps Environment + Log Analytics workspace
+- User-assigned Managed Identity (with ACR pull + **Cognitive Services Speech
+  User** role on your existing Speech resource)
+- The Container App itself
 
-📚 **Full deployment guide:** [DEPLOYMENT.md](DEPLOYMENT.md)
+## Troubleshooting
 
-## Local Development vs Production
-
-The app automatically adapts:
-
-**Local Development:**
-- Uses Azure CLI credentials
-- Logs to files and console
-- Hot reload with `--reload`
-
-**Azure Container Apps:**
-- Uses Managed Identity (no credentials needed!)
-- Console logging only
-- Auto-scales based on traffic
-- Built-in SSL/TLS (HTTPS/WSS)
-
-## Performance Tips
-
-**For faster translations:**
-- Use `gpt-4-realtime-preview` model (more responsive)
-- Lower temperature in session config (0.6 vs 0.8-1.0)
-- Use high-performance TTS voices
-
-**For better accuracy:**
-- Use `gpt-4-realtime-preview` model
-- Ensure clear audio input (quiet environment)
-- Speak at normal pace
-
-**For lower latency:**
-- Reduce VAD silence duration
-- Optimize network connection
-- Use SSD for log storage
-
-## API Documentation
-
-### WebSocket Endpoint (`/ws`)
-
-Bidirectional WebSocket for real-time translation control.
-
-**Messages sent to server:**
-```json
-{
-  "type": "start",
-  "text": "optional initial message"
-}
-```
-
-```json
-{
-  "type": "stop"
-}
-```
-
-**Messages received from server:**
-```json
-{
-  "type": "status",
-  "message": "Ready"
-}
-```
-
-```json
-{
-  "type": "transcript_done",
-  "text": "User's transcribed speech"
-}
-```
-
-```json
-{
-  "type": "assistant_done",
-  "text": "Translation response"
-}
-```
-
-## Contributing
-
-To improve the project:
-
-1. Test your changes thoroughly
-2. Update instructions in `system_instructions.txt` if needed
-3. Commit changes with clear messages
-4. Test across different language pairs
-
-## Supported Models
-
-- `gpt-4-realtime-preview` (Recommended - best instruction following)
-- `gpt-4-turbo-realtime` (Good accuracy and speed)
-- `gpt-realtime` (Faster, good for basic use)
+- **`The given key was not present in the dictionary` / no audio back** —
+  Your identity is missing the **Cognitive Services Speech User** role on
+  the Speech resource. Grant it and retry. Locally, run `az login` first.
+- **Translation only works in one direction** — make sure `interpreter.py`
+  builds the translation config from the v2 universal endpoint
+  (`wss://<region>.stt.speech.microsoft.com/speech/universal/v2`). Continuous
+  language identification on `TranslationRecognizer` requires that endpoint.
+- **Crackly playback** — `web/app.js` schedules chunks against a running
+  `nextPlayTime` cursor for gapless playback; do not revert to a
+  `source.onended` chain.
+- **`pyaudio` install fails (CLI only)** — install PortAudio
+  (`brew install portaudio` / `apt install portaudio19-dev` /
+  `pip install pipwin && pipwin install pyaudio` on Windows).
+- **Port 8000 already in use** — `uvicorn server:app --port 8001`.
 
 ## License
 
-[Add your license here]
-
-## Support
-
-For issues or questions:
-1. Check [QUICK_GUIDE.md](QUICK_GUIDE.md) for quick answers
-2. Review logs for error details
-3. See [INSTRUCTION_IMPROVEMENTS.md](INSTRUCTION_IMPROVEMENTS.md) for tuning guidance
-4. Check Azure VoiceLive documentation
-
-## Resources
-
-- [Azure OpenAI VoiceLive Documentation](https://learn.microsoft.com/azure/ai-services/)
-- [FastAPI Documentation](https://fastapi.tiangolo.com/)
-- [Azure CLI Documentation](https://learn.microsoft.com/cli/azure/)
-
-## Roadmap
-
-- [ ] Multi-language group conversations (3+ languages)
-- [ ] Custom voice cloning
-- [ ] Translation quality metrics
-- [ ] Batch processing for documents
-- [ ] Mobile app
-- [ ] Offline mode with local models
-
----
-
-**Last Updated:** February 3, 2026  
-**Version:** 1.0.0
+Add your license here.

@@ -41,9 +41,9 @@ jobs:
 
       - name: Set Azure environment variables
         run: |
-          azd env set AZURE_VOICELIVE_ENDPOINT "${{ secrets.AZURE_VOICELIVE_ENDPOINT }}"
-          azd env set AZURE_VOICELIVE_VOICE "${{ vars.AZURE_VOICELIVE_VOICE }}" || true
-          azd env set ENABLE_LOGGING "false"
+          azd env set AZURE_SPEECH_RESOURCE_ID "${{ secrets.AZURE_SPEECH_RESOURCE_ID }}"
+          azd env set AZURE_SPEECH_REGION "${{ vars.AZURE_SPEECH_REGION }}"
+          azd env set AZURE_SPEECH_DEFAULT_VOICE "${{ vars.AZURE_SPEECH_DEFAULT_VOICE }}" || true
 
       - name: Provision Infrastructure
         run: azd provision --no-prompt

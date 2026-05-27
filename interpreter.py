@@ -221,12 +221,15 @@ class LiveInterpreter:
         return f"aad#{self.resource_id}#{token.token}"
 
     def _build_translation_config(self, auth_token: str) -> speechsdk.translation.SpeechTranslationConfig:
-        cfg = speechsdk.translation.SpeechTranslationConfig(
-            auth_token=auth_token, region=self.region
-        )
+        # Continuous language identification on TranslationRecognizer is only
+        # supported via the v2 universal endpoint. With a plain region-based
+        # config the SDK falls back to "at-start" LID and effectively pins the
+        # source language to the first one in the list, which breaks B->A.
+        endpoint = f"wss://{self.region}.stt.speech.microsoft.com/speech/universal/v2"
+        cfg = speechsdk.translation.SpeechTranslationConfig(endpoint=endpoint)
+        cfg.authorization_token = auth_token
         cfg.add_target_language(self.code_a)
         cfg.add_target_language(self.code_b)
-        # Continuous LID lets the source language switch utterance-to-utterance.
         cfg.set_property(
             property_id=speechsdk.PropertyId.SpeechServiceConnection_LanguageIdMode,
             value="Continuous",
@@ -254,9 +257,17 @@ class LiveInterpreter:
 
     def _target_for_source(self, src_locale: Optional[str]) -> Tuple[str, str]:
         """Pick the other side of the pair as the translation target."""
-        if src_locale and src_locale.lower() == self.lang_a.lower():
-            return self.code_b, self.lang_b
-        return self.code_a, self.lang_a
+        if src_locale:
+            s = src_locale.lower()
+            a = self.lang_a.lower()
+            b = self.lang_b.lower()
+            s_base = s.split("-")[0]
+            if s == b or s_base == b.split("-")[0]:
+                return self.code_a, self.lang_a
+            if s == a or s_base == a.split("-")[0]:
+                return self.code_b, self.lang_b
+        # Unknown source: default to translating into B.
+        return self.code_b, self.lang_b
 
     def _on_recognizing(self, evt) -> None:
         text = evt.result.text or ""

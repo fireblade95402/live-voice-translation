@@ -40,24 +40,32 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
-# Get Azure VoiceLive endpoint
-Write-Host "`nEnter your Azure VoiceLive endpoint:" -ForegroundColor Yellow
-Write-Host "Example: https://your-resource.services.ai.azure.com/" -ForegroundColor Gray
-$endpoint = Read-Host "Endpoint"
+# Get Azure Speech resource details
+Write-Host "`nEnter the full resource ID of your Azure Speech / AI Services resource:" -ForegroundColor Yellow
+Write-Host "Example: /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.CognitiveServices/accounts/<name>" -ForegroundColor Gray
+$speechId = Read-Host "Resource ID"
 
-if ([string]::IsNullOrWhiteSpace($endpoint)) {
-    Write-Host "❌ Endpoint is required" -ForegroundColor Red
+if ([string]::IsNullOrWhiteSpace($speechId)) {
+    Write-Host "❌ Speech resource ID is required" -ForegroundColor Red
     exit 1
 }
 
-# Set environment variable
-azd env set AZURE_VOICELIVE_ENDPOINT $endpoint
+Write-Host "`nEnter the Azure region of that Speech resource (e.g. swedencentral, eastus2):" -ForegroundColor Yellow
+$speechRegion = Read-Host "Region"
 
-# Optional: Voice setting
-Write-Host "`nVoice setting (press Enter for default: en-US-Ava:DragonHDLatestNeural):" -ForegroundColor Yellow
+if ([string]::IsNullOrWhiteSpace($speechRegion)) {
+    Write-Host "❌ Speech region is required" -ForegroundColor Red
+    exit 1
+}
+
+azd env set AZURE_SPEECH_RESOURCE_ID $speechId
+azd env set AZURE_SPEECH_REGION $speechRegion
+
+# Optional: default voice
+Write-Host "`nDefault neural voice (press Enter for en-US-AvaMultilingualNeural):" -ForegroundColor Yellow
 $voice = Read-Host "Voice"
 if (![string]::IsNullOrWhiteSpace($voice)) {
-    azd env set AZURE_VOICELIVE_VOICE $voice
+    azd env set AZURE_SPEECH_DEFAULT_VOICE $voice
 }
 
 # Deploy

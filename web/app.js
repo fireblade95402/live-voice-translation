@@ -387,7 +387,7 @@ function startConversation({ clear = true, statusMessage } = {}) {
   startMicrophoneCapture();
 
   const langA = langASelect ? langASelect.value : "en-US";
-  const langB = langBSelect ? langBSelect.value : "es-ES";
+  const langB = langBSelect ? langBSelect.value : "fr-FR";
   socket.send(JSON.stringify({ type: "start", langA, langB }));
 }
 

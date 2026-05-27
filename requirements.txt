@@ -1,6 +1,9 @@
 azure-cognitiveservices-speech
 azure-core
 azure-identity
+# aiohttp is required by azure.identity.aio (DefaultAzureCredential's async
+# managed-identity path) but isn't a hard dependency of the package.
+aiohttp
 python-dotenv
 pyaudio
 fastapi

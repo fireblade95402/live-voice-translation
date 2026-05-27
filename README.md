@@ -192,6 +192,86 @@ The Bicep templates provision:
   User** role on your existing Speech resource)
 - The Container App itself
 
+## CI/CD with GitHub Actions
+
+The workflow at [.github/workflows/azure-deploy.yml](.github/workflows/azure-deploy.yml)
+runs `azd provision` then `azd deploy` on every push to `main` (and via the
+**Run workflow** button). It authenticates to Azure with a federated
+credential (OIDC) — no client secrets stored in GitHub.
+
+### One-time setup
+
+The fastest path is to let `azd` configure GitHub for you (creates the app
+registration, the federated credential, and writes all required secrets and
+variables):
+
+```bash
+azd pipeline config
+```
+
+Then `git push origin main` and the workflow runs.
+
+### Manual setup
+
+If you'd rather wire it up yourself, create the items below under
+**Settings → Secrets and variables → Actions**.
+
+**Secrets**
+
+| Secret | Description |
+|--------|-------------|
+| `AZURE_SPEECH_RESOURCE_ID` | Full ARM resource ID of your Speech / AI Services resource. |
+
+**Variables**
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `AZURE_CLIENT_ID` | yes | Client ID of the app registration used for OIDC federation. |
+| `AZURE_TENANT_ID` | yes | Tenant ID. |
+| `AZURE_SUBSCRIPTION_ID` | yes | Target subscription. |
+| `AZURE_ENV_NAME` | yes | `azd` environment name, e.g. `voice-translation-prod`. |
+| `AZURE_LOCATION` | yes | Region for the Container App, e.g. `eastus`. |
+| `AZURE_SPEECH_REGION` | yes | Region of the Speech resource (may differ from `AZURE_LOCATION`). |
+| `AZURE_SPEECH_DEFAULT_VOICE` | no | Override default neural voice. |
+
+### Federated credential
+
+If setting up manually, create an app registration and add a federated
+credential pointing at this repository:
+
+```bash
+APP_ID=$(az ad app create --display-name "live-voice-translation-gh" --query appId -o tsv)
+az ad sp create --id "$APP_ID"
+
+az ad app federated-credential create --id "$APP_ID" --parameters @- <<EOF
+{
+  "name": "github-main",
+  "issuer": "https://token.actions.githubusercontent.com",
+  "subject": "repo:<OWNER>/<REPO>:ref:refs/heads/main",
+  "audiences": ["api://AzureADTokenExchange"]
+}
+EOF
+
+# Give it rights to deploy
+az role assignment create --assignee "$APP_ID" --role Contributor \
+  --scope "/subscriptions/<SUBSCRIPTION_ID>"
+# And to grant the Speech User role on the existing Speech resource
+az role assignment create --assignee "$APP_ID" --role "User Access Administrator" \
+  --scope "<AZURE_SPEECH_RESOURCE_ID>"
+```
+
+Use the resulting `appId` as the `AZURE_CLIENT_ID` GitHub variable.
+
+### What the workflow does
+
+1. Installs `azd` and signs in via the federated credential.
+2. Runs `azd env set` for `AZURE_SPEECH_RESOURCE_ID`, `AZURE_SPEECH_REGION`,
+   and `AZURE_SPEECH_DEFAULT_VOICE`.
+3. `azd provision` — applies the Bicep templates in `infra/`.
+4. `azd deploy` — builds the Docker image, pushes it to ACR, and rolls out
+   a new Container App revision.
+5. Writes the deployed Container App URL to the run summary.
+
 ## Troubleshooting
 
 - **`The given key was not present in the dictionary` / no audio back** —

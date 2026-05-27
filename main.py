@@ -1,881 +1,191 @@
-# -------------------------------------------------------------------------
-# Copyright (c) Microsoft Corporation. All rights reserved.
-# Licensed under the MIT License.
-# -------------------------------------------------------------------------
-#
-# As a translator. You translate any language you hear to English.  
-# And if you hear English translator to the other language that you have heard. 
-# Key is to help with real-time translation of a conversation multi-language. 
-# When to hear the first non-English language. confirm it and always use it in the conversation.
-#
-#
-#
+"""CLI for the Live Interpreter using the local microphone and speakers.
+
+Reads PCM16 24kHz mono from the default mic, pushes it into the interpreter,
+and plays synthesised audio back through the default output device.
+
+Usage:
+    python main.py --lang-a en-US --lang-b es-ES
+"""
 
 from __future__ import annotations
-import os
-import re
-import sys
+
 import argparse
 import asyncio
 import base64
-from datetime import datetime
 import logging
+import os
 import queue
 import signal
-from typing import Union, Optional, TYPE_CHECKING, cast, Callable, Awaitable
+from typing import Optional
 
-from azure.core.credentials import AzureKeyCredential
-from azure.core.credentials_async import AsyncTokenCredential
-from azure.identity.aio import AzureCliCredential, DefaultAzureCredential
-
-from azure.ai.voicelive.aio import connect
-from azure.ai.voicelive.models import (
-    AudioEchoCancellation,
-    AudioInputTranscriptionOptions,
-    AudioNoiseReduction,
-    AzureStandardVoice,
-    InputTextContentPart,
-    InputAudioFormat,
-    Modality,
-    OutputAudioFormat,
-    RequestSession,
-    ServerEventType,
-    ServerVad,
-    UserMessageItem,
-)
-from dotenv import load_dotenv
 import pyaudio
-from langdetect import detect, LangDetectException
+from azure.identity.aio import DefaultAzureCredential
+from dotenv import load_dotenv
 
-if TYPE_CHECKING:
-    # Only needed for type checking; avoids runtime import issues
-    from azure.ai.voicelive.aio import VoiceLiveConnection
+from interpreter import LiveInterpreter
 
-## Change to the directory where this script is located
-os.chdir(os.path.dirname(os.path.abspath(__file__)))
+load_dotenv("./.env", override=True)
 
-# Environment variable loading
-load_dotenv('./.env', override=True)
-
-# Set up logging
-## Check if logging is enabled
-enable_logging = os.environ.get('ENABLE_LOGGING', 'true').lower() in ('true', '1', 'yes')
-timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-
-if enable_logging:
-    ## Add folder for logging
-    if not os.path.exists('logs'):
-        os.makedirs('logs')
-    
-    ## Set up file logging
-    logging.basicConfig(
-        filename=f'logs/{timestamp}_voicelive.log',
-        filemode="w",
-        format='%(asctime)s:%(name)s:%(levelname)s:%(message)s',
-        level=logging.INFO
-    )
-else:
-    ## Set up console logging only (no file)
-    logging.basicConfig(
-        format='%(asctime)s:%(name)s:%(levelname)s:%(message)s',
-        level=logging.INFO
-    )
-
+logging.basicConfig(
+    format="%(asctime)s:%(name)s:%(levelname)s:%(message)s",
+    level=logging.INFO,
+)
 logger = logging.getLogger(__name__)
-logger.info(f"Logging to file: {enable_logging}")
 
-def load_instructions() -> str:
-    """
-    Load system instructions from file or environment variable.
-    Prefers file-based instructions (AZURE_VOICELIVE_INSTRUCTIONS_FILE) over inline env var.
-    """
-    # Try loading from file first
-    instructions_file = os.environ.get("AZURE_VOICELIVE_INSTRUCTIONS_FILE")
-    if instructions_file and os.path.exists(instructions_file):
-        try:
-            with open(instructions_file, 'r', encoding='utf-8') as f:
-                instructions = f.read().strip()
-                logger.info(f"Loaded instructions from {instructions_file}")
-                return instructions
-        except Exception as e:
-            logger.warning(f"Failed to load instructions from {instructions_file}: {e}")
-    
-    # Fall back to environment variable
-    instructions = os.environ.get(
-        "AZURE_VOICELIVE_INSTRUCTIONS",
-        "You are a helpful AI assistant. Respond naturally and conversationally. "
-        "Keep your responses concise but engaging.",
-    )
-    logger.info("Using instructions from environment variable or default")
-    return instructions
+SAMPLE_RATE = LiveInterpreter.SAMPLE_RATE  # 24kHz PCM16 mono
+CHUNK = 1200  # ~50ms
 
-class AudioProcessor:
-    """
-    Handles real-time audio capture and playback for the voice assistant.
 
-    Threading Architecture:
-    - Main thread: Event loop and UI
-    - Capture thread: PyAudio input stream reading
-    - Send thread: Async audio data transmission to VoiceLive
-    - Playback thread: PyAudio output stream writing
-    """
-    
-    loop: asyncio.AbstractEventLoop
-    
-    class AudioPlaybackPacket:
-        """Represents a packet that can be sent to the audio playback queue."""
-        def __init__(self, seq_num: int, data: Optional[bytes]):
-            self.seq_num = seq_num
-            self.data = data
+class LocalAudio:
+    """Mic capture + speaker playback for a single interpreter session."""
 
-    def __init__(self, connection, emit_callback=None):
-        self.connection = connection
-        self.emit_callback = emit_callback  # Callback to emit audio to web client
-        self.server_mode = os.environ.get('SERVER_MODE', 'false').lower() in ('true', '1', 'yes')
-        
-        # Audio configuration - PCM16, 24kHz, mono as specified
-        self.channels = 1
-        self.rate = 24000
-        self.chunk_size = 1200 # 50ms
-        
-        if not self.server_mode:
-            self.audio = pyaudio.PyAudio()
-            self.format = pyaudio.paInt16
-            logger.info("AudioProcessor initialized with 24kHz PCM16 mono audio")
-        else:
-            self.audio = None
-            self.format = None
-            logger.info("Running in server mode - PyAudio disabled, audio handled by web client")
-
-        # Capture and playback state
-        self.input_stream = None
-
-        self.playback_queue: queue.Queue[AudioProcessor.AudioPlaybackPacket] = queue.Queue()
-        self.playback_base = 0
-        self.next_seq_num = 0
+    def __init__(self, interpreter: LiveInterpreter) -> None:
+        self.interpreter = interpreter
+        self.pa = pyaudio.PyAudio()
+        self.input_stream: Optional[pyaudio.Stream] = None
         self.output_stream: Optional[pyaudio.Stream] = None
+        self.play_queue: queue.Queue[bytes] = queue.Queue()
+        self.loop: Optional[asyncio.AbstractEventLoop] = None
 
-    def start_capture(self):
-        """Start capturing audio from microphone."""
-        if self.server_mode:
-            logger.info("Server mode: Audio capture handled by web client")
-            return
-            
-        def _capture_callback(
-            in_data,      # data
-            _frame_count,  # number of frames
-            _time_info,    # dictionary
-            _status_flags):
-            """Audio capture thread - runs in background."""
-            audio_base64 = base64.b64encode(in_data).decode("utf-8")
-            asyncio.run_coroutine_threadsafe(
-                self.connection.input_audio_buffer.append(audio=audio_base64), self.loop
-            )
+    def start(self, loop: asyncio.AbstractEventLoop) -> None:
+        self.loop = loop
+
+        def _capture(in_data, _frame_count, _time_info, _status):
+            self.interpreter.push_audio(base64.b64encode(in_data).decode("ascii"))
             return (None, pyaudio.paContinue)
 
-        if self.input_stream:
-            return
+        self.input_stream = self.pa.open(
+            format=pyaudio.paInt16,
+            channels=1,
+            rate=SAMPLE_RATE,
+            input=True,
+            frames_per_buffer=CHUNK,
+            stream_callback=_capture,
+        )
 
-        # Store the current event loop for use in threads
-        self.loop = asyncio.get_event_loop()
+        remaining = bytearray()
 
-        try:
-            self.input_stream = self.audio.open(
-                format=self.format,
-                channels=self.channels,
-                rate=self.rate,
-                input=True,
-                frames_per_buffer=self.chunk_size,
-                stream_callback=_capture_callback,
-            )
-            logger.info("Started audio capture")
-
-        except Exception:
-            logger.exception("Failed to start audio capture")
-            raise
-
-    def start_playback(self):
-        """Initialize audio playback system."""
-        if self.server_mode:
-            logger.info("Server mode: Audio playback handled by web client")
-            return
-            
-        if self.output_stream:
-            return
-
-        remaining = bytes()
-        def _playback_callback(
-            _in_data,
-            frame_count,  # number of frames
-            _time_info,
-            _status_flags):
-
+        def _playback(_in_data, frame_count, _time_info, _status):
             nonlocal remaining
-            frame_count *= pyaudio.get_sample_size(pyaudio.paInt16)
-
-            out = remaining[:frame_count]
-            remaining = remaining[frame_count:]
-
-            while len(out) < frame_count:
+            want = frame_count * 2  # 16-bit mono
+            out = bytes(remaining[:want])
+            remaining = remaining[want:]
+            while len(out) < want:
                 try:
-                    packet = self.playback_queue.get_nowait()
+                    chunk = self.play_queue.get_nowait()
                 except queue.Empty:
-                    out = out + bytes(frame_count - len(out))
-                    continue
-                except Exception:
-                    logger.exception("Error in audio playback")
-                    raise
-
-                if not packet or not packet.data:
-                    # None packet indicates end of stream
-                    logger.info("End of playback queue.")
+                    out += b"\x00" * (want - len(out))
                     break
+                out += chunk[: want - len(out)]
+                if len(chunk) > want - len(out):
+                    remaining.extend(chunk[want - len(out) :])
+            return (out, pyaudio.paContinue)
 
-                if packet.seq_num < self.playback_base:
-                    # skip requested
-                    # ignore skipped packet and clear remaining
-                    if len(remaining) > 0:
-                        remaining = bytes()
-                    continue
+        self.output_stream = self.pa.open(
+            format=pyaudio.paInt16,
+            channels=1,
+            rate=SAMPLE_RATE,
+            output=True,
+            frames_per_buffer=CHUNK,
+            stream_callback=_playback,
+        )
 
-                num_to_take = frame_count - len(out)
-                out = out + packet.data[:num_to_take]
-                remaining = packet.data[num_to_take:]
-
-            if len(out) >= frame_count:
-                return (out, pyaudio.paContinue)
-            else:
-                return (out, pyaudio.paComplete)
-
+    def enqueue_audio(self, audio_b64: str) -> None:
         try:
-            self.output_stream = self.audio.open(
-                format=self.format,
-                channels=self.channels,
-                rate=self.rate,
-                output=True,
-                frames_per_buffer=self.chunk_size,
-                stream_callback=_playback_callback
-            )
-            logger.info("Audio playback system ready")
+            self.play_queue.put(base64.b64decode(audio_b64))
         except Exception:
-            logger.exception("Failed to initialize audio playback")
-            raise
+            logger.exception("Failed to decode playback audio")
 
-    def _get_and_increase_seq_num(self):
-        seq = self.next_seq_num
-        self.next_seq_num += 1
-        return seq
-
-    def queue_audio(self, audio_data: Optional[bytes]) -> None:
-        """Queue audio data for playback."""
-        if self.server_mode and self.emit_callback and audio_data:
-            # In server mode, send audio directly to web client
-            import base64
-            import asyncio
-            audio_base64 = base64.b64encode(audio_data).decode('utf-8')
-            
-            # Call the emit callback (handle both sync and async)
-            try:
-                result = self.emit_callback('audio', {'data': audio_base64})
-                if asyncio.iscoroutine(result):
-                    # Schedule the coroutine if it's async
-                    asyncio.create_task(result)
-            except Exception as e:
-                logger.error(f"Error emitting audio: {e}")
-        
-        self.playback_queue.put(
-            AudioProcessor.AudioPlaybackPacket(
-                seq_num=self._get_and_increase_seq_num(),
-                data=audio_data))
-
-    def skip_pending_audio(self):
-        """Skip current audio in playback queue."""
-        self.playback_base = self._get_and_increase_seq_num()
-
-    def shutdown(self):
-        """Clean up audio resources."""
-        if self.server_mode:
-            logger.info("Server mode: No audio resources to clean up")
-            return
-            
-        if self.input_stream:
-            self.input_stream.stop_stream()
-            self.input_stream.close()
-            self.input_stream = None
-
-        logger.info("Stopped audio capture")
-
-        # Inform thread to complete
-        if self.output_stream:
-            self.skip_pending_audio()
-            self.queue_audio(None)
-            self.output_stream.stop_stream()
-            self.output_stream.close()
-            self.output_stream = None
-
-        logger.info("Stopped audio playback")
-
-        if self.audio:
-            self.audio.terminate()
-
-        logger.info("Audio processor cleaned up")
-
-class BasicVoiceAssistant:
-    """Basic voice assistant implementing the VoiceLive SDK patterns."""
-
-    def __init__(
-        self,
-        endpoint: str,
-        credential: Union[AzureKeyCredential, AsyncTokenCredential],
-        model: str,
-        voice: str,
-        instructions: str,
-        initial_text: Optional[str] = None,
-        event_callback: Optional[Callable[[str, dict], Union[None, Awaitable[None]]]] = None,
-        audio_callback: Optional[Callable[[str, dict], Union[None, Awaitable[None]]]] = None,
-        session_overrides: Optional[dict] = None,
-    ):
-
-        self.endpoint = endpoint
-        self.credential = credential
-        self.model = model
-        self.voice = voice
-        self.instructions = instructions
-        # Optional tunables for session config (VAD, noise reduction, echo cancel, etc.)
-        self.session_overrides = session_overrides or {}
-        self.connection: Optional["VoiceLiveConnection"] = None
-        self.audio_processor: Optional[AudioProcessor] = None
-        self.session_ready = False
-        self._active_response = False
-        self._response_api_done = False
-        self._event_callback = event_callback
-        self._audio_callback = audio_callback
-        self._user_transcript = ""
-        self._assistant_transcript = ""
-        self._detected_language: Optional[str] = None
-        self._initial_text = initial_text
-        self._initial_text_sent = False
-        # Current transcription model/language. Starts from env defaults; can be
-        # updated mid-session once the assistant confirms the language pair.
-        self._transcription_model: str = os.environ.get(
-            "VOICELIVE_TRANSCRIPTION_MODEL", "gpt-4o-transcribe"
-        )
-        self._transcription_language: Optional[str] = (
-            os.environ.get("VOICELIVE_TRANSCRIPTION_LANGUAGE") or None
-        )
-        self._transcription_enabled: bool = os.environ.get(
-            "ENABLE_INPUT_TRANSCRIPTION", "true"
-        ).strip().lower() not in ("false", "0", "no", "off")
-        if not self._transcription_enabled:
-            logger.info(
-                "Input transcription disabled via ENABLE_INPUT_TRANSCRIPTION; "
-                "the 'Spoken' bubble will not be shown."
-            )
-        self._languages_locked = False
-
-    async def _emit(self, event_type: str, payload: dict) -> None:
-        if not self._event_callback:
-            return
-        try:
-            result = self._event_callback(event_type, payload)
-            if asyncio.iscoroutine(result):
-                await result
-        except Exception:
-            logger.exception("Failed to emit event: %s", event_type)
-
-    def _maybe_detect_language(self, text: str) -> Optional[str]:
-        if not text or self._detected_language:
-            return self._detected_language
-        try:
-            lang = detect(text)
-        except LangDetectException:
-            return None
-
-        if lang and lang != "en":
-            language_map = {
-                "es": "Spanish",
-                "fr": "French",
-                "de": "German",
-                "it": "Italian",
-                "pt": "Portuguese",
-                "ja": "Japanese",
-                "ko": "Korean",
-                "zh-cn": "Chinese (Simplified)",
-                "zh-tw": "Chinese (Traditional)",
-                "ar": "Arabic",
-                "ru": "Russian",
-                "hi": "Hindi",
-            }
-            self._detected_language = language_map.get(lang, lang)
-        return self._detected_language
-
-    async def start(self):
-        """Start the voice assistant session."""
-        try:
-            logger.info("Connecting to VoiceLive API with model %s", self.model)
-
-            # Connect to VoiceLive WebSocket API
-            async with connect(
-                endpoint=self.endpoint,
-                credential=self.credential,
-                model=self.model,
-            ) as connection:
-                conn = connection
-                self.connection = conn
-
-                # Notify that connection is ready for audio input
-                await self._emit("connection_ready", {"connection": conn})
-
-                # Initialize audio processor
-                ap = AudioProcessor(conn, emit_callback=self._audio_callback)
-                self.audio_processor = ap
-
-                # Configure session for voice conversation
-                await self._setup_session()
-
-                # Start audio systems
-                ap.start_playback()
-
-                logger.info("Voice assistant ready! Start speaking...")
-                print("\n" + "=" * 60)
-                print("[MIC] VOICE ASSISTANT READY")
-                print("Start speaking to begin conversation")
-                print("Press Ctrl+C to exit")
-                print("=" * 60 + "\n")
-                await self._emit("status", {"message": "Ready"})
-
-                # Process events
-                await self._process_events()
-        finally:
-            if self.audio_processor:
-                self.audio_processor.shutdown()
-
-    async def _setup_session(self):
-        """Configure the VoiceLive session for audio conversation."""
-        logger.info("Setting up voice conversation session...")
-
-        # Create voice configuration
-        voice_config: Union[AzureStandardVoice, str]
-        if self.voice.startswith("en-US-") or self.voice.startswith("en-CA-") or "-" in self.voice:
-            # Azure voice
-            voice_config = AzureStandardVoice(name=self.voice)
-        else:
-            # OpenAI voice (alloy, echo, fable, onyx, nova, shimmer)
-            voice_config = self.voice
-
-        # Create turn detection configuration (overridable)
-        ov = self.session_overrides
-        turn_detection_config = ServerVad(
-            threshold=float(ov.get("vad_threshold", 0.5)),
-            prefix_padding_ms=int(ov.get("prefix_padding_ms", 300)),
-            silence_duration_ms=int(ov.get("silence_duration_ms", 500)),
-        )
-
-        echo_cancel = (
-            AudioEchoCancellation() if ov.get("echo_cancellation", True) else None
-        )
-        noise_reduction = (
-            AudioNoiseReduction(type=ov.get("noise_reduction_type", "azure_deep_noise_suppression"))
-            if ov.get("noise_reduction", True)
-            else None
-        )
-
-        # Transcribe the user's spoken input so the UI can show the original text
-        # alongside the translated assistant response. Language handling depends
-        # on the transcription model:
-        #   - gpt-4o-transcribe / gpt-4o-mini-transcribe / whisper-1: single
-        #     ISO-639-1 code (e.g. 'en'). Leave unset for auto-detect.
-        #   - azure-speech: BCP-47 locale (e.g. 'en-US'), or a comma-separated
-        #     list for multi-language auto-detection (e.g. 'en-US,fr-FR').
-        # Once MODE A confirms the language pair, _update_transcription_languages
-        # rewrites this config mid-session.
-        input_transcription = (
-            AudioInputTranscriptionOptions(
-                model=self._transcription_model,
-                language=self._transcription_language,
-            )
-            if self._transcription_enabled
-            else None
-        )
-
-        # Create session configuration
-        session_config = RequestSession(
-            modalities=[Modality.TEXT, Modality.AUDIO],
-            instructions=self.instructions,
-            voice=voice_config,
-            input_audio_format=InputAudioFormat.PCM16,
-            output_audio_format=OutputAudioFormat.PCM16,
-            turn_detection=turn_detection_config,
-            input_audio_echo_cancellation=echo_cancel,
-            input_audio_noise_reduction=noise_reduction,
-            input_audio_transcription=input_transcription,
-        )
-
-        conn = self.connection
-        assert conn is not None, "Connection must be established before setting up session"
-        await conn.session.update(session=session_config)
-
-        logger.info("Session configuration sent")
-
-    # BCP-47 / ISO-639-1 codes for languages we support locking onto. Add more
-    # as needed. Order matters only for fallback ISO-639-1 lookups.
-    _LANGUAGE_TO_LOCALES = {
-        "english": ("en-US", "en"),
-        "spanish": ("es-ES", "es"),
-        "french": ("fr-FR", "fr"),
-        "german": ("de-DE", "de"),
-        "italian": ("it-IT", "it"),
-        "portuguese": ("pt-PT", "pt"),
-        "brazilian portuguese": ("pt-BR", "pt"),
-        "dutch": ("nl-NL", "nl"),
-        "russian": ("ru-RU", "ru"),
-        "arabic": ("ar-SA", "ar"),
-        "hindi": ("hi-IN", "hi"),
-        "japanese": ("ja-JP", "ja"),
-        "korean": ("ko-KR", "ko"),
-        "chinese": ("zh-CN", "zh"),
-        "mandarin": ("zh-CN", "zh"),
-        "cantonese": ("zh-HK", "zh"),
-        "polish": ("pl-PL", "pl"),
-        "turkish": ("tr-TR", "tr"),
-        "swedish": ("sv-SE", "sv"),
-        "norwegian": ("nb-NO", "no"),
-        "danish": ("da-DK", "da"),
-        "finnish": ("fi-FI", "fi"),
-        "greek": ("el-GR", "el"),
-        "hebrew": ("he-IL", "he"),
-        "thai": ("th-TH", "th"),
-        "vietnamese": ("vi-VN", "vi"),
-        "indonesian": ("id-ID", "id"),
-        "czech": ("cs-CZ", "cs"),
-        "romanian": ("ro-RO", "ro"),
-        "ukrainian": ("uk-UA", "uk"),
-    }
-
-    _CONFIRMATION_PATTERN = re.compile(
-        r"translate between\s+([A-Za-z][A-Za-z\s]*?)\s+and\s+([A-Za-z][A-Za-z\s]*?)\s*[\.!]",
-        re.IGNORECASE,
-    )
-
-    def _resolve_language_codes(self, name1: str, name2: str) -> Optional[str]:
-        """Map two spoken language names to a transcription `language` value.
-
-        For `azure-speech` we return BCP-47 locales joined by comma so the
-        service auto-detects between them. For other models (which only accept
-        a single ISO-639-1 code) we return just the first language's code.
-        Returns None if either language can't be resolved.
-        """
-        entry1 = self._LANGUAGE_TO_LOCALES.get(name1.strip().lower())
-        entry2 = self._LANGUAGE_TO_LOCALES.get(name2.strip().lower())
-        if not entry1 or not entry2:
-            return None
-
-        if self._transcription_model == "azure-speech":
-            return f"{entry1[0]},{entry2[0]}"
-        # Non-azure models: single ISO-639-1 code only. Pin to language 1.
-        return entry1[1]
-
-    async def _update_transcription_languages(self, lang_value: str) -> None:
-        """Re-issue session.update with a new input_audio_transcription config."""
-        conn = self.connection
-        if conn is None:
-            return
-        if not self._transcription_enabled:
-            # Transcription is disabled globally; nothing to update.
-            self._languages_locked = True
-            return
-        try:
-            new_transcription = AudioInputTranscriptionOptions(
-                model=self._transcription_model,
-                language=lang_value,
-            )
-            session_config = RequestSession(input_audio_transcription=new_transcription)
-            await conn.session.update(session=session_config)
-            self._transcription_language = lang_value
-            self._languages_locked = True
-            logger.info(
-                "Updated transcription language to %r (model=%s)",
-                lang_value,
-                self._transcription_model,
-            )
-        except Exception:
-            logger.exception("Failed to update transcription language")
-
-    async def _maybe_lock_languages_from_assistant(self, text: str) -> None:
-        """Detect the MODE A confirmation phrase and reconfigure transcription."""
-        if self._languages_locked or not text:
-            return
-        match = self._CONFIRMATION_PATTERN.search(text)
-        if not match:
-            return
-        lang_value = self._resolve_language_codes(match.group(1), match.group(2))
-        if not lang_value:
-            logger.info(
-                "Confirmation matched but languages unrecognized: %r / %r",
-                match.group(1),
-                match.group(2),
-            )
-            return
-        await self._update_transcription_languages(lang_value)
-
-    async def _send_text_message(self, text: str) -> None:
-        conn = self.connection
-        assert conn is not None, "Connection must be established before sending text"
-
-        item = UserMessageItem(content=[InputTextContentPart(text=text)])
-        await conn.conversation.item.create(item=item)
-        await conn.response.create()
-
-        await self._emit("transcript_delta", {"text": text})
-        await self._emit("transcript_done", {"text": text})
-
-    async def _process_events(self):
-        """Process events from the VoiceLive connection."""
-        try:
-            conn = self.connection
-            assert conn is not None, "Connection must be established before processing events"
-            async for event in conn:
-                await self._handle_event(event)
-        except Exception:
-            logger.exception("Error processing events")
-            raise
-
-    async def _handle_event(self, event):
-        """Handle different types of events from VoiceLive."""
-        logger.debug("Received event: %s", event.type)
-        ap = self.audio_processor
-        conn = self.connection
-        assert ap is not None, "AudioProcessor must be initialized"
-        assert conn is not None, "Connection must be established"
-
-        if event.type == ServerEventType.SESSION_UPDATED:
-            logger.info("Session ready: %s", event.session.id)
-            self.session_ready = True
-            await self._emit("status", {"message": "Listening for speech..."})
-
-            # Start audio capture once session is ready
-            ap.start_capture()
-
-            if self._initial_text and not self._initial_text_sent:
-                self._initial_text_sent = True
-                await self._send_text_message(self._initial_text)
-                # Clear initial text after sending to prevent resending on interruption
-                self._initial_text = None
-
-        elif event.type == ServerEventType.INPUT_AUDIO_BUFFER_SPEECH_STARTED:
-            logger.info("User started speaking - stopping playback")
-            print("[MIC] Listening...")
-            await self._emit("status", {"message": "Listening for speech..."})
-
-            ap.skip_pending_audio()
-
-            # Only cancel if response is active and not already done
-            if self._active_response and not self._response_api_done:
+    def shutdown(self) -> None:
+        for s in (self.input_stream, self.output_stream):
+            if s is not None:
                 try:
-                    await conn.response.cancel()
-                    logger.debug("Cancelled in-progress response due to barge-in")
-                except Exception as e:
-                    if "no active response" in str(e).lower():
-                        logger.debug("Cancel ignored - response already completed")
-                    else:
-                        logger.warning("Cancel failed: %s", e)
-
-        elif event.type == ServerEventType.INPUT_AUDIO_BUFFER_SPEECH_STOPPED:
-            logger.info("🎤 User stopped speaking")
-            print("🤔 Processing...")
-            await self._emit("status", {"message": "Processing..."})
-
-        elif event.type == ServerEventType.RESPONSE_CREATED:
-            logger.info("🤖 Assistant response created")
-            self._active_response = True
-            self._response_api_done = False
-            await self._emit("status", {"message": "Responding..."})
-
-        elif event.type == ServerEventType.RESPONSE_AUDIO_DELTA:
-            logger.debug("Received audio delta")
-            ap.queue_audio(event.delta)
-
-        elif event.type == ServerEventType.RESPONSE_AUDIO_DONE:
-            logger.info("[BOT] Assistant finished speaking")
-            print("[MIC] Ready for next input...")
-            await self._emit("status", {"message": "Listening for speech..."})
-
-        elif event.type == ServerEventType.RESPONSE_DONE:
-            logger.info("[OK] Response complete")
-            self._active_response = False
-            self._response_api_done = True
-
-        elif event.type == ServerEventType.ERROR:
-            msg = event.error.message
-            if "Cancellation failed: no active response" in msg:
-                logger.debug("Benign cancellation error: %s", msg)
-            else:
-                logger.error("❌ VoiceLive error: %s", msg)
-                print(f"Error: {msg}")
-
-        elif event.type == ServerEventType.CONVERSATION_ITEM_CREATED:
-            logger.debug("Conversation item created: %s", event.item.id)
-
-        elif event.type == ServerEventType.CONVERSATION_ITEM_INPUT_AUDIO_TRANSCRIPTION_DELTA:
-            delta = getattr(event, "delta", "") or ""
-            logger.info("User transcription delta: %r", delta)
-            if delta:
-                self._user_transcript += delta
-                await self._emit("transcript_delta", {"text": delta})
-
-        elif event.type == ServerEventType.CONVERSATION_ITEM_INPUT_AUDIO_TRANSCRIPTION_COMPLETED:
-            text = getattr(event, "transcript", None) or self._user_transcript
-            logger.info("User transcription completed: %r", text)
-            if text:
-                await self._emit("transcript_done", {"text": text})
-                detected = self._maybe_detect_language(text)
-                if detected:
-                    await self._emit("language", {"language": detected})
-            self._user_transcript = ""
-
-        elif event.type == ServerEventType.CONVERSATION_ITEM_INPUT_AUDIO_TRANSCRIPTION_FAILED:
-            err = getattr(event, "error", None)
-            err_msg = getattr(err, "message", str(err)) if err else "unknown"
-            logger.warning("User transcription FAILED: %s", err_msg)
-            await self._emit("status", {"message": f"Transcription failed: {err_msg}"})
-
-        elif event.type == ServerEventType.RESPONSE_TEXT_DELTA:
-            delta = getattr(event, "delta", "") or ""
-            if delta:
-                self._assistant_transcript += delta
-                await self._emit("assistant_delta", {"text": delta})
-
-        elif event.type == ServerEventType.RESPONSE_TEXT_DONE:
-            text = getattr(event, "text", None) or self._assistant_transcript
-            if text:
-                await self._emit("assistant_done", {"text": text})
-                await self._maybe_lock_languages_from_assistant(text)
-            self._assistant_transcript = ""
-
-        elif event.type == ServerEventType.RESPONSE_AUDIO_TRANSCRIPT_DELTA:
-            delta = getattr(event, "delta", "") or ""
-            if delta:
-                self._assistant_transcript += delta
-                await self._emit("assistant_delta", {"text": delta})
-
-        elif event.type == ServerEventType.RESPONSE_AUDIO_TRANSCRIPT_DONE:
-            text = getattr(event, "text", None) or self._assistant_transcript
-            if text:
-                await self._emit("assistant_done", {"text": text})
-                await self._maybe_lock_languages_from_assistant(text)
-            self._assistant_transcript = ""
-
-        else:
-            logger.debug("Unhandled event type: %s", event.type)
+                    s.stop_stream()
+                    s.close()
+                except Exception:
+                    pass
+        self.pa.terminate()
 
 
-def parse_arguments():
-    """Parse command line arguments."""
-    parser = argparse.ArgumentParser(
-        description="Basic Voice Assistant using Azure VoiceLive SDK",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+def _parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(description="Live Interpreter CLI")
+    p.add_argument("--lang-a", default=os.environ.get("INTERPRETER_LANG_A", "en-US"))
+    p.add_argument("--lang-b", default=os.environ.get("INTERPRETER_LANG_B", "es-ES"))
+    p.add_argument(
+        "--resource-id",
+        default=os.environ.get("AZURE_SPEECH_RESOURCE_ID"),
+        help="Speech resource ID (subscription/.../accounts/<name>).",
     )
-
-    parser.add_argument(
-        "--endpoint",
-        help="Azure VoiceLive endpoint",
-        type=str,
-        default=os.environ.get("AZURE_VOICELIVE_ENDPOINT", "https://project-a-2-a-swe-resource.services.ai.azure.com/"),
+    p.add_argument(
+        "--region",
+        default=os.environ.get("AZURE_SPEECH_REGION"),
+        help="Speech resource Azure region (e.g. swedencentral).",
     )
-
-    parser.add_argument(
-        "--model",
-        help="VoiceLive model to use",
-        type=str,
-        default=os.environ.get("AZURE_VOICELIVE_MODEL", "gpt-realtime"),
-    )
-
-    parser.add_argument(
-        "--voice",
-        help="Voice to use for the assistant. E.g. alloy, echo, fable, en-US-AvaNeural, en-US-GuyNeural",
-        type=str,
-        default=os.environ.get("AZURE_VOICELIVE_VOICE", "en-US-Ava:DragonHDLatestNeural"),
-    )
-
-    parser.add_argument("--verbose", help="Enable verbose logging", action="store_true")
-
-    return parser.parse_args()
+    return p.parse_args()
 
 
-def main():
-    """Main function."""
-    args = parse_arguments()
+async def _run() -> None:
+    args = _parse_args()
+    if not args.resource_id or not args.region:
+        raise SystemExit(
+            "AZURE_SPEECH_RESOURCE_ID and AZURE_SPEECH_REGION must be set "
+            "(via .env or CLI args)."
+        )
 
-    # Set logging level
-    if args.verbose:
-        logging.getLogger().setLevel(logging.DEBUG)
+    credential = DefaultAzureCredential()
+    audio: Optional[LocalAudio] = None
 
-    # Create client with Azure token credential
-    # DefaultAzureCredential supports multiple auth methods:
-    # - Managed Identity (for Azure deployments)
-    # - Azure CLI (for local development)
-    # - Environment variables, etc.
-    credential: AsyncTokenCredential = DefaultAzureCredential()
-    logger.info("Using Azure DefaultAzureCredential")
+    interpreter_ref: dict[str, LiveInterpreter] = {}
 
-    # Create and start voice assistant
-    instructions = load_instructions()
+    async def _on_event(event_type: str, payload: dict) -> None:
+        if event_type == "audio" and audio is not None:
+            audio.enqueue_audio(payload.get("data", ""))
+        elif event_type == "final":
+            src = payload.get("source", "")
+            tgt = payload.get("translation", "")
+            print(f"\n[{payload.get('source_locale')}] {src}")
+            print(f"   -> [{payload.get('target_locale')}] {tgt}")
+        elif event_type == "status":
+            logger.info("status: %s", payload.get("message"))
+        elif event_type == "error":
+            logger.error("error: %s", payload.get("message"))
 
-    assistant = BasicVoiceAssistant(
-        endpoint=args.endpoint,
+    interpreter = LiveInterpreter(
+        resource_id=args.resource_id,
+        region=args.region,
         credential=credential,
-        model=args.model,
-        voice=args.voice,
-        instructions=instructions,
+        lang_a=args.lang_a,
+        lang_b=args.lang_b,
+        event_callback=_on_event,
     )
+    interpreter_ref["i"] = interpreter
 
-    # Setup signal handlers for graceful shutdown
-    def signal_handler(_sig, _frame):
-        logger.info("Received shutdown signal")
-        raise KeyboardInterrupt()
+    audio = LocalAudio(interpreter)
 
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
+    loop = asyncio.get_running_loop()
 
-    # Start the assistant
+    def _request_shutdown(*_args):
+        asyncio.run_coroutine_threadsafe(interpreter.stop(), loop)
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, _request_shutdown)
+        except (NotImplementedError, RuntimeError):
+            signal.signal(sig, _request_shutdown)
+
+    print(f"\nLive Interpreter ready: {args.lang_a} <-> {args.lang_b}")
+    print("Speak into your default microphone. Press Ctrl+C to exit.\n")
+
+    audio.start(loop)
     try:
-        asyncio.run(assistant.start())
-    except KeyboardInterrupt:
-        print("\n👋 Voice assistant shut down. Goodbye!")
-    except Exception as e:
-        print("Fatal Error: ", e)
+        await interpreter.start()
+    finally:
+        audio.shutdown()
+        await credential.close()
+
 
 if __name__ == "__main__":
-    # Check audio system
     try:
-        p = pyaudio.PyAudio()
-        # Check for input devices
-        input_devices = [
-            i
-            for i in range(p.get_device_count())
-            if cast(Union[int, float], p.get_device_info_by_index(i).get("maxInputChannels", 0) or 0) > 0
-        ]
-        # Check for output devices
-        output_devices = [
-            i
-            for i in range(p.get_device_count())
-            if cast(Union[int, float], p.get_device_info_by_index(i).get("maxOutputChannels", 0) or 0) > 0
-        ]
-        p.terminate()
-
-        if not input_devices:
-            print("❌ No audio input devices found. Please check your microphone.")
-            sys.exit(1)
-        if not output_devices:
-            print("❌ No audio output devices found. Please check your speakers.")
-            sys.exit(1)
-
-    except Exception as e:
-        print(f"❌ Audio system check failed: {e}")
-        sys.exit(1)
-
-    print("🎙️  Basic Voice Assistant with Azure VoiceLive SDK")
-    print("=" * 50)
-
-    # Run the assistant
-    main()
+        asyncio.run(_run())
+    except KeyboardInterrupt:
+        print("\nGoodbye!")

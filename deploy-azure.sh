@@ -41,26 +41,35 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-# Get Azure VoiceLive endpoint
+# Get Azure Speech resource details
 echo ""
-echo "Enter your Azure VoiceLive endpoint:"
-echo "Example: https://your-resource.services.ai.azure.com/"
-read -p "Endpoint: " endpoint
+echo "Enter the full resource ID of your Azure Speech / AI Services resource:"
+echo "Example: /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.CognitiveServices/accounts/<name>"
+read -p "Resource ID: " speech_id
 
-if [ -z "$endpoint" ]; then
-    echo "❌ Endpoint is required"
+if [ -z "$speech_id" ]; then
+    echo "❌ Speech resource ID is required"
     exit 1
 fi
 
-# Set environment variable
-azd env set AZURE_VOICELIVE_ENDPOINT "$endpoint"
-
-# Optional: Voice setting
 echo ""
-echo "Voice setting (press Enter for default: en-US-Ava:DragonHDLatestNeural):"
+echo "Enter the Azure region of that Speech resource (e.g. swedencentral, eastus2):"
+read -p "Region: " speech_region
+
+if [ -z "$speech_region" ]; then
+    echo "❌ Speech region is required"
+    exit 1
+fi
+
+azd env set AZURE_SPEECH_RESOURCE_ID "$speech_id"
+azd env set AZURE_SPEECH_REGION "$speech_region"
+
+# Optional: default voice
+echo ""
+echo "Default neural voice (press Enter for en-US-AvaMultilingualNeural):"
 read -p "Voice: " voice
 if [ ! -z "$voice" ]; then
-    azd env set AZURE_VOICELIVE_VOICE "$voice"
+    azd env set AZURE_SPEECH_DEFAULT_VOICE "$voice"
 fi
 
 # Deploy

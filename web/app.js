@@ -6,13 +6,15 @@ const chatEl = document.getElementById("chat");
 const languageDisplayEl = document.getElementById("languageDisplay");
 const language1El = document.getElementById("language1");
 const language2El = document.getElementById("language2");
+const langASelect = document.getElementById("langA");
+const langBSelect = document.getElementById("langB");
 
 let conversationActive = false;
 let conversationPaused = false;
 let micMuted = false;
 let socket;
-let currentUserMessage = null;
-let currentAssistantMessage = null;
+let currentSourceBubble = null;
+let currentTranslationBubble = null;
 let languages = { lang1: null, lang2: null };
 let audioContext = null;
 let audioWorklet = null;
@@ -80,8 +82,8 @@ function updateCombinedFlag(lang1, lang2) {
 
 function clearConversation() {
   chatEl.innerHTML = "";
-  currentUserMessage = null;
-  currentAssistantMessage = null;
+  currentSourceBubble = null;
+  currentTranslationBubble = null;
 }
 
 function hideLanguages() {
@@ -382,7 +384,7 @@ function updateControls() {
   muteMicButton.setAttribute("aria-pressed", micMuted ? "true" : "false");
 }
 
-function startConversation({ clear = true, initialText, statusMessage } = {}) {
+function startConversation({ clear = true, statusMessage } = {}) {
   if (!socket || socket.readyState !== WebSocket.OPEN) {
     setStatus("Waiting for connection...");
     return;
@@ -394,16 +396,12 @@ function startConversation({ clear = true, initialText, statusMessage } = {}) {
   }
   setStatus(statusMessage || "Starting session...");
   updateControls();
-  console.log("Sending start message");
 
-  // Start microphone capture
   startMicrophoneCapture();
 
-  const payload = { type: "start" };
-  if (typeof initialText === "string") {
-    payload.text = initialText;
-  }
-  socket.send(JSON.stringify(payload));
+  const langA = langASelect ? langASelect.value : "en-US";
+  const langB = langBSelect ? langBSelect.value : "es-ES";
+  socket.send(JSON.stringify({ type: "start", langA, langB }));
 }
 
 function stopConversation({ setIdle = true } = {}) {
@@ -448,7 +446,7 @@ newConversationButton.addEventListener("click", () => {
   if (conversationActive) {
     stopConversation();
   }
-  startConversation({ initialText: "Hi" });
+  startConversation();
 });
 
 pauseConversationButton.addEventListener("click", () => {
@@ -509,56 +507,40 @@ function connectWebSocket() {
   });
 
   socket.addEventListener("message", (event) => {
-    console.log("Message received:", event.data);
     const data = JSON.parse(event.data);
     switch (data.type) {
       case "status":
         setStatus(data.message);
         break;
       case "audio":
-        // Handle audio playback
         playAudio(data.data);
         break;
-      case "transcript_delta":
-        if (!currentUserMessage) {
-          currentUserMessage = addMessage("user", "");
-        }
-        appendToMessage(currentUserMessage, data.text || "");
+      case "language_pair":
+        showLanguages(data.lang1, data.lang2);
         break;
-      case "transcript_done":
-        // Some transcription models only emit the final text (no deltas).
-        // Make sure the user bubble appears with the final transcript.
-        if (!currentUserMessage && data.text) {
-          currentUserMessage = addMessage("user", data.text);
-        } else if (currentUserMessage && data.text && !currentUserMessage.textContent) {
-          currentUserMessage.textContent = data.text;
-          scrollToBottom();
+      case "partial":
+        if (!currentSourceBubble) {
+          currentSourceBubble = addMessage("user", "");
         }
-        currentUserMessage = null;
+        if (!currentTranslationBubble) {
+          currentTranslationBubble = addMessage("assistant", "");
+        }
+        currentSourceBubble.textContent = data.source || "";
+        currentTranslationBubble.textContent = data.translation || "";
+        scrollToBottom();
         break;
-      case "assistant_delta":
-        if (!currentAssistantMessage) {
-          currentAssistantMessage = addMessage("assistant", "");
+      case "final":
+        if (!currentSourceBubble) {
+          currentSourceBubble = addMessage("user", "");
         }
-        appendToMessage(currentAssistantMessage, data.text || "");
-        break;
-      case "assistant_done":
-        // Check if this message contains language confirmation
-        console.log("Checking for languages in:", data.text);
-        if (data.text) {
-          const extractedLangs = extractLanguages(data.text);
-          console.log("Extracted languages:", extractedLangs);
-          if (extractedLangs) {
-            // Update the UI if languages changed during the conversation
-            if (
-              extractedLangs.lang1 !== languages.lang1 ||
-              extractedLangs.lang2 !== languages.lang2
-            ) {
-              showLanguages(extractedLangs.lang1, extractedLangs.lang2);
-            }
-          }
+        if (!currentTranslationBubble) {
+          currentTranslationBubble = addMessage("assistant", "");
         }
-        currentAssistantMessage = null;
+        currentSourceBubble.textContent = data.source || "";
+        currentTranslationBubble.textContent = data.translation || "";
+        scrollToBottom();
+        currentSourceBubble = null;
+        currentTranslationBubble = null;
         break;
       case "error":
         setStatus("Error: " + (data.message || "Unknown error"));

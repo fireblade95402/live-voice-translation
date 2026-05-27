@@ -108,9 +108,10 @@ function playAudio(audioDataBase64) {
     // Create AudioBuffer from PCM16 data (24kHz, mono)
     const sampleRate = 24000;
     const numSamples = bytes.length / 2; // 16-bit = 2 bytes per sample
+    if (numSamples === 0) return;
     const audioBuffer = audioContext.createBuffer(1, numSamples, sampleRate);
     const channelData = audioBuffer.getChannelData(0);
-    
+
     // Convert bytes to float32
     const view = new DataView(bytes.buffer);
     for (let i = 0; i < numSamples; i++) {
@@ -118,44 +119,30 @@ function playAudio(audioDataBase64) {
       channelData[i] = int16 / 32768.0; // Normalize to -1..1
     }
 
-    // Add to queue instead of playing immediately
-    audioQueue.push(audioBuffer);
-    
-    // Start playing if not already playing
-    if (!isPlayingAudio) {
-      playNextAudioChunk();
+    // Schedule immediately against a running cursor so chunks are gapless.
+    // Waiting on source.onended (the old behaviour) always leaves a tiny
+    // silent gap between chunks which sounds like crackle/popping.
+    const source = audioContext.createBufferSource();
+    source.buffer = audioBuffer;
+    source.connect(audioContext.destination);
+
+    const now = audioContext.currentTime;
+    // Small lead-in the first time so the very first chunk doesn't try to
+    // start at "now" (which can itself underrun).
+    if (nextPlayTime < now) {
+      nextPlayTime = now + 0.06;
     }
+    source.start(nextPlayTime);
+    nextPlayTime += audioBuffer.duration;
+    isPlayingAudio = true;
+    source.onended = () => {
+      if (audioContext && nextPlayTime <= audioContext.currentTime + 0.01) {
+        isPlayingAudio = false;
+      }
+    };
   } catch (error) {
     console.error("Error playing audio:", error);
   }
-}
-
-function playNextAudioChunk() {
-  if (audioQueue.length === 0) {
-    isPlayingAudio = false;
-    return;
-  }
-
-  isPlayingAudio = true;
-  const audioBuffer = audioQueue.shift();
-  
-  const source = audioContext.createBufferSource();
-  source.buffer = audioBuffer;
-  source.connect(audioContext.destination);
-  
-  // Calculate when to start this chunk
-  const currentTime = audioContext.currentTime;
-  const startTime = Math.max(currentTime, nextPlayTime);
-  
-  // Schedule the next chunk to play right after this one
-  nextPlayTime = startTime + audioBuffer.duration;
-  
-  // When this chunk finishes, play the next one
-  source.onended = () => {
-    playNextAudioChunk();
-  };
-  
-  source.start(startTime);
 }
 
 async function startMicrophoneCapture() {

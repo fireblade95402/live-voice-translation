@@ -319,11 +319,11 @@ class LiveInterpreter:
             audio = result.audio_data or b""
             if not audio:
                 return
-            # 24kHz * 16-bit mono => 48,000 bytes/sec. 4800 bytes ~= 100ms.
-            chunk_size = 4800
-            for i in range(0, len(audio), chunk_size):
-                b64 = base64.b64encode(audio[i : i + chunk_size]).decode("ascii")
-                self._emit_threadsafe("audio", {"data": b64})
+            # The synth call above blocks until the full utterance is rendered,
+            # so streaming it in small chunks adds no latency benefit and only
+            # creates audible seams on the client. Send it as one buffer.
+            b64 = base64.b64encode(audio).decode("ascii")
+            self._emit_threadsafe("audio", {"data": b64})
         except Exception:
             logger.exception("Synthesis failed")
 
